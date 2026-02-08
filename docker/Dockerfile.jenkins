@@ -1,0 +1,110 @@
+# =============================================================================
+# DevOps Jenkins Custom Dockerfile
+# =============================================================================
+# Jenkins with pre-installed DevOps CI/CD tools:
+# - Python 3 + venv
+# - Ansible, boto3, botocore
+# - AWS CLI v2
+# - Docker CLI
+# - Terraform
+# - Jenkins Configuration as Code (JCASC)
+# =============================================================================
+
+FROM jenkins/jenkins:lts-jdk17
+
+# Skip initial setup wizard
+ENV JAVA_OPTS="-Djenkins.install.runSetupWizard=false"
+
+# Jenkins Configuration as Code
+ENV CASC_JENKINS_CONFIG=/var/jenkins_home/casc_configs
+
+# Switch to root to install packages
+USER root
+
+# -----------------------------
+# Install system packages
+# -----------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    apt-transport-https \
+    ca-certificates \
+    curl \
+    gnupg \
+    lsb-release \
+    python3 \
+    python3-pip \
+    python3-venv \
+    unzip \
+    git \
+    sudo \
+    jq \
+    gettext-base \
+    && rm -rf /var/lib/apt/lists/*
+
+# -----------------------------
+# Install Docker CLI
+# -----------------------------
+RUN curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null && \
+    apt-get update && \
+    apt-get install -y docker-ce-cli && \
+    rm -rf /var/lib/apt/lists/*
+
+# -----------------------------
+# Install Terraform
+# -----------------------------
+ENV TERRAFORM_VERSION=1.6.6
+RUN curl -fsSL https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip -o terraform.zip && \
+    unzip terraform.zip && \
+    mv terraform /usr/local/bin/ && \
+    rm terraform.zip
+
+# -----------------------------
+# Install Python DevOps tools in a venv
+# -----------------------------
+RUN python3 -m venv /opt/venv && \
+    . /opt/venv/bin/activate && \
+    pip install --upgrade pip && \
+    pip install --no-cache-dir ansible boto3 botocore
+ENV PATH="/opt/venv/bin:$PATH"
+
+# -----------------------------
+# Install latest AWS CLI v2
+# -----------------------------
+RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
+    unzip awscliv2.zip && \
+    ./aws/install --update && \
+    rm -rf aws awscliv2.zip
+
+# -----------------------------
+# Create CasC directory
+# -----------------------------
+RUN mkdir -p /var/jenkins_home/casc_configs && \
+    chown -R jenkins:jenkins /var/jenkins_home/casc_configs
+
+# -----------------------------
+# Switch back to Jenkins user
+# -----------------------------
+USER jenkins
+
+# -----------------------------
+# Copy plugins list and install
+# -----------------------------
+COPY --chown=jenkins:jenkins plugins.txt /usr/share/jenkins/ref/plugins.txt
+RUN jenkins-plugin-cli --plugin-file /usr/share/jenkins/ref/plugins.txt
+
+# -----------------------------
+# Copy Jenkins Configuration as Code
+# -----------------------------
+# Make sure this folder exists in build context
+COPY --chown=jenkins:jenkins casc/ /var/jenkins_home/casc_configs/
+
+# -----------------------------
+# Expose Jenkins ports
+# -----------------------------
+EXPOSE 8080 50000
+
+# -----------------------------
+# Health check
+# -----------------------------
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+    CMD curl -f http://loca
