@@ -11,3 +11,4 @@ pytest-html==4.1.1
 flake8==7.0.0
 pylint==3.0.3
 bandit==1.7.5
+pbr==6.1.0

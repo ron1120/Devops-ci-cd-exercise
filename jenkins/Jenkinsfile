@@ -87,7 +87,7 @@ pipeline {
         stage('End-to-End Tests') {
             steps {
                 script {
-                    sh '. ${VENV_DIR}/bin/activate && pytest tests/e2e/ -v --junit-xml=reports/e2e-tests.xml -m "not e2e" || true'
+                    sh '. ${VENV_DIR}/bin/activate && pytest tests/e2e/ -v --junit-xml=reports/e2e-tests.xml || true'
                 }
             }
             post {
@@ -100,7 +100,9 @@ pipeline {
         
         stage('Performance Tests') {
             when {
-                branch 'production'
+                expression {
+                    env.GIT_BRANCH == 'origin/production' || env.BRANCH_NAME == 'production'
+                }
             }
             steps {
                 script {
@@ -145,9 +147,8 @@ pipeline {
         
         stage('Create Version Tag') {
             when {
-                anyOf {
-                    branch 'main'
-                    branch 'develop'
+                expression {
+                    env.GIT_BRANCH == 'origin/main' || env.GIT_BRANCH == 'origin/develop' || env.BRANCH_NAME == 'main' || env.BRANCH_NAME == 'develop'
                 }
             }
             steps {
@@ -171,9 +172,8 @@ pipeline {
         
         stage('Build Docker Image') {
             when {
-                anyOf {
-                    branch 'main'
-                    branch 'develop'
+                expression {
+                    env.GIT_BRANCH == 'origin/main' || env.GIT_BRANCH == 'origin/develop' || env.BRANCH_NAME == 'main' || env.BRANCH_NAME == 'develop'
                 }
             }
             steps {
@@ -195,7 +195,9 @@ pipeline {
         
         stage('Deploy to Staging') {
             when {
-                branch 'develop'
+                expression {
+                    env.GIT_BRANCH == 'origin/develop' || env.BRANCH_NAME == 'develop'
+                }
             }
             steps {
                 script {
