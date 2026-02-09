@@ -22,6 +22,11 @@ pipeline {
                 script {
                     sh 'echo "Checking out repository from GitHub"'
                     git branch: 'main', credentialsId: 'RonGitUser', url: 'https://github.com/ron1120/Devops-ci-cd-exercise.git'
+                    env.GIT_BRANCH_NAME = sh(script: 'git rev-parse --abbrev-ref HEAD || echo "main"', returnStdout: true).trim()
+                    if (env.GIT_BRANCH_NAME == 'HEAD') {
+                        env.GIT_BRANCH_NAME = 'main'
+                    }
+                    echo "Git branch detected: ${env.GIT_BRANCH_NAME}"
                 }
             }
         }
