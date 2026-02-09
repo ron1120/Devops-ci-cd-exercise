@@ -21,15 +21,7 @@ pipeline {
             steps {
                 script {
                     sh 'echo "Checking out repository from GitHub"'
-                    checkout([$class: 'GitSCM', 
-                        branches: [[name: '*/main']], 
-                        userRemoteConfigs: [[url: env.GIT_REPO]]
-                    ])
-                    // Since checkout specifies */main, we know we're on main branch
-                    // For future support of multiple branches, use git branch -r to detect current commit's branch
-                    def detectedBranch = sh(script: 'git branch -r --contains HEAD | grep -o "main\\|develop\\|production" | head -1 || echo "main"', returnStdout: true).trim()
-                    env.GIT_BRANCH_NAME = detectedBranch ?: 'main'
-                    echo "Git branch detected: ${env.GIT_BRANCH_NAME} (commit: ${env.GIT_COMMIT})"
+                    git branch: 'main', credentialsId: 'RonGitUser', url: 'https://github.com/ron1120/Devops-ci-cd-exercise'
                 }
             }
         }
