@@ -285,16 +285,14 @@ pipeline {
                 script {
                     sh '''
                         # Check if Docker CLI is available
-                        if ! command -v docker &> /dev/null; then
+                        if ! command -v docker >/dev/null 2>&1; then
                             echo "⚠ Docker CLI not available - skipping build"
                             exit 0
                         fi
                         
-                        # Check Docker daemon availability (will fail with "permission denied" if socket unreachable)
+                        # Check Docker daemon availability
                         if ! docker info >/dev/null 2>&1; then
-                            DOCKER_ERROR=$?
-                            echo "⚠ Docker daemon error (exit code: $DOCKER_ERROR) - likely permission denied on socket or daemon unreachable"
-                            echo "  Solution: Mount Docker socket with: docker run -v /var/run/docker.sock:/var/run/docker.sock --group-add \$(stat -c '%g' /var/run/docker.sock) jenkins"
+                            echo "⚠ Docker daemon not reachable - skipping build"
                             exit 0
                         fi
                         
@@ -325,16 +323,14 @@ pipeline {
                 script {
                     sh '''
                         # Check if Docker CLI is available
-                        if ! command -v docker &> /dev/null; then
+                        if ! command -v docker >/dev/null 2>&1; then
                             echo "⚠ Docker CLI not available - skipping push"
                             exit 0
                         fi
                         
                         # Check Docker daemon availability
                         if ! docker info >/dev/null 2>&1; then
-                            DOCKER_ERROR=$?
-                            echo "⚠ Docker daemon error (exit code: $DOCKER_ERROR) - likely permission denied on socket or daemon unreachable"
-                            echo "  Solution: Mount Docker socket with: docker run -v /var/run/docker.sock:/var/run/docker.sock --group-add \$(stat -c '%g' /var/run/docker.sock) jenkins"
+                            echo "⚠ Docker daemon not reachable - skipping push"
                             exit 0
                         fi
                         
