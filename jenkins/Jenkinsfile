@@ -21,7 +21,7 @@ pipeline {
             steps {
                 script {
                     sh 'echo "Checking out repository from GitHub"'
-                    git branch: 'main', credentialsId: 'RonGitUser', url: 'https://github.com/ron1120/Devops-ci-cd-exercise'
+                    git branch: 'main', credentialsId: 'RonGitUser', url: 'https://github.com/ron1120/Devops-ci-cd-exercise.git'
                 }
             }
         }
