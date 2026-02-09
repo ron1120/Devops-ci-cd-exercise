@@ -25,6 +25,11 @@ pipeline {
                         branches: [[name: '*/main']], 
                         userRemoteConfigs: [[url: env.GIT_REPO]]
                     ])
+                    // Since checkout specifies */main, we know we're on main branch
+                    // For future support of multiple branches, use git branch -r to detect current commit's branch
+                    def detectedBranch = sh(script: 'git branch -r --contains HEAD | grep -o "main\\|develop\\|production" | head -1 || echo "main"', returnStdout: true).trim()
+                    env.GIT_BRANCH_NAME = detectedBranch ?: 'main'
+                    echo "Git branch detected: ${env.GIT_BRANCH_NAME} (commit: ${env.GIT_COMMIT})"
                 }
             }
         }
@@ -32,11 +37,27 @@ pipeline {
         stage('Setup Environment') {
             steps {
                 script {
-                    sh 'echo "Setting up Python environment"'
-                    
-                    sh 'python${PYTHON_VERSION} -m venv ${VENV_DIR}'
-                    sh '. ${VENV_DIR}/bin/activate && pip install --upgrade pip'
-                    sh '. ${VENV_DIR}/bin/activate && pip install -r requirements.txt'
+                    sh '''
+                        echo "Setting up Python environment"
+
+                        # Prefer using node's python3 if present (no Docker API required)
+                        if command -v python3 >/dev/null 2>&1; then
+                            echo "python3 available on node — creating venv locally"
+                            python${PYTHON_VERSION} -m venv ${VENV_DIR}
+                            . ${VENV_DIR}/bin/activate && pip install --upgrade pip
+                            . ${VENV_DIR}/bin/activate && pip install -r requirements.txt
+
+                        # Otherwise, use Docker only if the Docker daemon is reachable
+                        elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+                            echo "Docker daemon reachable — using python:3.11-slim to create venv"
+                            docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c "python${PYTHON_VERSION} -m venv ${VENV_DIR} && . ${VENV_DIR}/bin/activate && pip install --upgrade pip && pip install -r requirements.txt"
+
+                        else
+                            echo "No usable Python3 on node and Docker daemon not reachable; cannot set up Python environment"
+                            echo "Please configure your Jenkins agent to have Python3, or enable Docker daemon access for this container/agent."
+                            exit 1
+                        fi
+                    '''
                 }
             }
         }
@@ -44,8 +65,23 @@ pipeline {
         stage('Lint Code') {
             steps {
                 script {
-                    sh '. ${VENV_DIR}/bin/activate && flake8 app/ --output-file=reports/flake8.txt || true'
-                    sh '. ${VENV_DIR}/bin/activate && pylint app/ --output=reports/pylint.txt || true'
+                    sh '''
+                        mkdir -p reports
+
+                        if command -v python3 >/dev/null 2>&1; then
+                            echo "Running linters using node's python3/venv"
+                            . ${VENV_DIR}/bin/activate && flake8 app/ --output-file=reports/flake8.txt || true
+                            . ${VENV_DIR}/bin/activate && pylint app/ --output=reports/pylint.txt || true
+
+                        elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+                            echo "Docker daemon reachable — running linters in python:3.11-slim container"
+                            docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c "pip install --no-cache-dir -r requirements.txt && flake8 app/ --output-file=reports/flake8.txt || true; pylint app/ --output=reports/pylint.txt || true"
+
+                        else
+                            echo "No usable Python3 on node and Docker daemon not reachable; cannot run linters"
+                            exit 1
+                        fi
+                    '''
                 }
             }
             post {
@@ -58,8 +94,22 @@ pipeline {
         stage('Unit Tests') {
             steps {
                 script {
-                    sh 'mkdir -p reports htmlcov'
-                    sh '. ${VENV_DIR}/bin/activate && pytest tests/unit/ -v --cov=app --cov-report=html:htmlcov --cov-report=xml:reports/coverage.xml --cov-report=term-missing --junit-xml=reports/unit-tests.xml'
+                    sh '''
+                        mkdir -p reports htmlcov
+
+                        if command -v python3 >/dev/null 2>&1; then
+                            echo "Running unit tests using node's python3/venv"
+                            . ${VENV_DIR}/bin/activate && pytest tests/unit/ -v --cov=app --cov-report=html:htmlcov --cov-report=xml:reports/coverage.xml --cov-report=term-missing --junit-xml=reports/unit-tests.xml
+
+                        elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+                            echo "Docker daemon reachable — running unit tests in python container"
+                            docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c "pip install --no-cache-dir -r requirements.txt && pytest tests/unit/ -v --cov=app --cov-report=html:htmlcov --cov-report=xml:reports/coverage.xml --cov-report=term-missing --junit-xml=reports/unit-tests.xml"
+
+                        else
+                            echo "No usable Python3 on node and Docker daemon not reachable; cannot run unit tests"
+                            exit 1
+                        fi
+                    '''
                 }
             }
             post {
@@ -73,7 +123,22 @@ pipeline {
         stage('Integration Tests') {
             steps {
                 script {
-                    sh '. ${VENV_DIR}/bin/activate && pytest tests/integration/ -v --junit-xml=reports/integration-tests.xml || true'
+                    sh '''
+                        mkdir -p reports
+
+                        if command -v python3 >/dev/null 2>&1; then
+                            echo "Running integration tests using node's python3/venv"
+                            . ${VENV_DIR}/bin/activate && pytest tests/integration/ -v --junit-xml=reports/integration-tests.xml || true
+
+                        elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+                            echo "Docker daemon reachable — running integration tests in python container"
+                            docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c "pip install --no-cache-dir -r requirements.txt && pytest tests/integration/ -v --junit-xml=reports/integration-tests.xml || true"
+
+                        else
+                            echo "No usable Python3 on node and Docker daemon not reachable; cannot run integration tests"
+                            exit 1
+                        fi
+                    '''
                 }
             }
             post {
@@ -87,7 +152,22 @@ pipeline {
         stage('End-to-End Tests') {
             steps {
                 script {
-                    sh '. ${VENV_DIR}/bin/activate && pytest tests/e2e/ -v --junit-xml=reports/e2e-tests.xml || true'
+                    sh '''
+                        mkdir -p reports
+
+                        if command -v python3 >/dev/null 2>&1; then
+                            echo "Running end-to-end tests using node's python3/venv"
+                            . ${VENV_DIR}/bin/activate && pytest tests/e2e/ -v --junit-xml=reports/e2e-tests.xml || true
+
+                        elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+                            echo "Docker daemon reachable — running end-to-end tests in python container"
+                            docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c "pip install --no-cache-dir -r requirements.txt && pytest tests/e2e/ -v --junit-xml=reports/e2e-tests.xml || true"
+
+                        else
+                            echo "No usable Python3 on node and Docker daemon not reachable; cannot run end-to-end tests"
+                            exit 1
+                        fi
+                    '''
                 }
             }
             post {
@@ -101,27 +181,33 @@ pipeline {
         stage('Performance Tests') {
             when {
                 expression {
-                    env.GIT_BRANCH == 'origin/production' || env.BRANCH_NAME == 'production'
+                    boolean isProduction = env.GIT_BRANCH_NAME == 'production'
+                    echo "Performance tests - branch: ${env.GIT_BRANCH_NAME}, isProduction=${isProduction}"
+                    return isProduction
                 }
             }
             steps {
                 script {
                     sh '''
-                        . ${VENV_DIR}/bin/activate
-                        
-                        python main.py &
-                        APP_PID=$!
-                        sleep 5
-                        
-                        locust -f tests/performance/locustfile.py \\
-                            --headless \\
-                            --users 10 \\
-                            --spawn-rate 2 \\
-                            --run-time 30s \\
-                            --host http://localhost:5000 \\
-                            --html reports/performance-report.html || true
-                        
-                        kill $APP_PID || true
+                        mkdir -p reports
+
+                        if command -v python3 >/dev/null 2>&1; then
+                            echo "Running performance tests using node's python3/venv"
+                            . ${VENV_DIR}/bin/activate
+                            python main.py &
+                            APP_PID=$!
+                            sleep 5
+                            locust -f tests/performance/locustfile.py --headless --users 10 --spawn-rate 2 --run-time 30s --host http://localhost:5000 --html reports/performance-report.html || true
+                            kill $APP_PID || true
+
+                        elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+                            echo "Docker daemon reachable — running performance tests in python container"
+                            docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c "pip install --no-cache-dir -r requirements.txt && python main.py & APP_PID=$!; sleep 5; locust -f tests/performance/locustfile.py --headless --users 10 --spawn-rate 2 --run-time 30s --host http://localhost:5000 --html reports/performance-report.html || true; kill $APP_PID || true"
+
+                        else
+                            echo "No usable Python3 on node and Docker daemon not reachable; cannot run performance tests"
+                            exit 1
+                        fi
                     '''
                 }
             }
@@ -135,7 +221,22 @@ pipeline {
         stage('Security Scan') {
             steps {
                 script {
-                    sh '. ${VENV_DIR}/bin/activate && bandit -r app/ -f json -o reports/bandit-report.json || true'
+                    sh '''
+                        mkdir -p reports
+
+                        if command -v python3 >/dev/null 2>&1; then
+                            echo "Running bandit using node's python3/venv"
+                            . ${VENV_DIR}/bin/activate && bandit -r app/ -f json -o reports/bandit-report.json || true
+
+                        elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+                            echo "Docker daemon reachable — running bandit in python container"
+                            docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c "pip install --no-cache-dir -r requirements.txt && bandit -r app/ -f json -o reports/bandit-report.json || true"
+
+                        else
+                            echo "No usable Python3 on node and Docker daemon not reachable; cannot run security scan"
+                            exit 1
+                        fi
+                    '''
                 }
             }
             post {
@@ -148,19 +249,24 @@ pipeline {
         stage('Create Version Tag') {
             when {
                 expression {
-                    env.GIT_BRANCH == 'origin/main' || env.GIT_BRANCH == 'origin/develop' || env.BRANCH_NAME == 'main' || env.BRANCH_NAME == 'develop'
+                    boolean isMainOrDevelop = env.GIT_BRANCH_NAME == 'main' || env.GIT_BRANCH_NAME == 'develop'
+                    echo "Version tag - branch: ${env.GIT_BRANCH_NAME}, isMainOrDevelop=${isMainOrDevelop}"
+                    return isMainOrDevelop
                 }
             }
             steps {
                 script {
-                    sh '''
-                        git config user.email "jenkins@example.com"
-                        git config user.name "Jenkins CI"
-                        VERSION=$(date +%Y.%m.%d.%H%M%S)
-                        git tag -a v$VERSION -m "Release version $VERSION" || true
-                        git push origin v$VERSION || true
-                        echo "VERSION=$VERSION" > version.txt
-                    '''
+                    withCredentials([usernamePassword(credentialsId: 'RonGitUser', passwordVariable: 'GIT_PASSWORD', usernameVariable: 'GIT_USERNAME')]) {
+                        sh '''
+                            git config user.email "jenkins@example.com"
+                            git config user.name "Jenkins CI"
+                            VERSION=$(date +%Y.%m.%d.%H%M%S)
+                            git tag -a v$VERSION -m "Release version $VERSION" || true
+                            echo "VERSION=$VERSION" > version.txt
+                            echo "✓ Version tag created locally: v$VERSION"
+                            echo "Note: Git push requires SSH keys or PAT configuration in Jenkins"
+                        '''
+                    }
                 }
             }
             post {
@@ -173,22 +279,119 @@ pipeline {
         stage('Build Docker Image') {
             when {
                 expression {
-                    env.GIT_BRANCH == 'origin/main' || env.GIT_BRANCH == 'origin/develop' || env.BRANCH_NAME == 'main' || env.BRANCH_NAME == 'develop'
+                    boolean isMainOrDevelop = env.GIT_BRANCH_NAME == 'main' || env.GIT_BRANCH_NAME == 'develop'
+                    echo "Docker build - branch: ${env.GIT_BRANCH_NAME}, isMainOrDevelop=${isMainOrDevelop}"
+                    return isMainOrDevelop
                 }
             }
             steps {
                 script {
                     sh '''
+                        # Check if Docker CLI is available
+                        if ! command -v docker &> /dev/null; then
+                            echo "⚠ Docker CLI not available - skipping build"
+                            exit 0
+                        fi
+                        
+                        # Check Docker daemon availability (will fail with "permission denied" if socket unreachable)
+                        if ! docker info >/dev/null 2>&1; then
+                            DOCKER_ERROR=$?
+                            echo "⚠ Docker daemon error (exit code: $DOCKER_ERROR) - likely permission denied on socket or daemon unreachable"
+                            echo "  Solution: Mount Docker socket with: docker run -v /var/run/docker.sock:/var/run/docker.sock --group-add \$(stat -c '%g' /var/run/docker.sock) jenkins"
+                            exit 0
+                        fi
+                        
                         if [ -f version.txt ]; then
                             VERSION=$(cat version.txt | cut -d= -f2)
                         else
                             VERSION=${BUILD_NUMBER}
                         fi
                         
+                        echo "Building Docker image: devops-testing-app:${VERSION}"
                         docker build -t devops-testing-app:${VERSION} -f docker/Dockerfile .
                         docker tag devops-testing-app:${VERSION} devops-testing-app:latest
-                        echo "Docker image built: devops-testing-app:${VERSION}"
+                        echo "✓ Docker image built successfully: devops-testing-app:${VERSION}"
                     '''
+                }
+            }
+        }
+
+        stage('Push Docker Image') {
+            when {
+                expression {
+                    boolean isMainOrDevelop = env.GIT_BRANCH_NAME == 'main' || env.GIT_BRANCH_NAME == 'develop'
+                    echo "Docker push - branch: ${env.GIT_BRANCH_NAME}, isMainOrDevelop=${isMainOrDevelop}"
+                    return isMainOrDevelop
+                }
+            }
+            steps {
+                script {
+                    sh '''
+                        # Check if Docker CLI is available
+                        if ! command -v docker &> /dev/null; then
+                            echo "⚠ Docker CLI not available - skipping push"
+                            exit 0
+                        fi
+                        
+                        # Check Docker daemon availability
+                        if ! docker info >/dev/null 2>&1; then
+                            DOCKER_ERROR=$?
+                            echo "⚠ Docker daemon error (exit code: $DOCKER_ERROR) - likely permission denied on socket or daemon unreachable"
+                            echo "  Solution: Mount Docker socket with: docker run -v /var/run/docker.sock:/var/run/docker.sock --group-add \$(stat -c '%g' /var/run/docker.sock) jenkins"
+                            exit 0
+                        fi
+                        
+                        # Determine version: try git tag, then version.txt, then BUILD_NUMBER
+                        VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || cat version.txt 2>/dev/null | cut -d= -f2 || echo "${BUILD_NUMBER}")
+                        
+                        if [ -z "$VERSION" ] || [ "$VERSION" = "${BUILD_NUMBER}" ] && ! [ -f version.txt ]; then
+                            VERSION=${BUILD_NUMBER}
+                        fi
+
+                        echo "Preparing to push devops-testing-app:${VERSION} to Docker Hub"
+                    '''
+
+                    // Use Docker Hub credentials stored in Jenkins (username/password)
+                    withCredentials([usernamePassword(credentialsId: 'RonDockerUser', usernameVariable: 'DOCKERHUB_USER', passwordVariable: 'DOCKERHUB_PASS')]) {
+                        sh '''
+                            # Re-determine VERSION for this shell context
+                            VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || cat version.txt 2>/dev/null | cut -d= -f2 || echo "${BUILD_NUMBER}")
+                            if [ -z "$VERSION" ]; then
+                                VERSION=${BUILD_NUMBER}
+                            fi
+                            
+                            echo "Using VERSION=${VERSION}"
+                            
+                            echo "$DOCKERHUB_PASS" | docker login -u "$DOCKERHUB_USER" --password-stdin
+
+                            # Try to inspect and push; if socket error, provide diagnostic info
+                            if docker image inspect devops-testing-app:${VERSION} >/dev/null 2>&1; then
+                                docker tag devops-testing-app:${VERSION} ${DOCKERHUB_USER}/devops-testing-app:${VERSION}
+                                docker tag devops-testing-app:${VERSION} ${DOCKERHUB_USER}/devops-testing-app:latest
+                                docker push ${DOCKERHUB_USER}/devops-testing-app:${VERSION}
+                                docker push ${DOCKERHUB_USER}/devops-testing-app:latest
+                                echo "✓ Pushed images to Docker Hub: ${DOCKERHUB_USER}/devops-testing-app:${VERSION} and :latest"
+                            else
+                                INSPECT_ERROR=$?
+                                echo "⚠ Could not inspect image devops-testing-app:${VERSION} (error code: $INSPECT_ERROR)"
+                                
+                                # Try to list images to diagnose socket vs. missing image issue
+                                echo "Checking available images:"
+                                if docker images devops-testing-app 2>&1; then
+                                    echo "No local devops-testing-app images found - build stage likely failed or was skipped"
+                                    echo "This may occur if Docker socket is not accessible to Jenkins"
+                                else
+                                    echo "⚠ Cannot list Docker images - socket permission issue detected"
+                                    echo "Solution: Restart Jenkins container with: docker run -v /var/run/docker.sock:/var/run/docker.sock --group-add \$(stat -c '%g' /var/run/docker.sock) ..."
+                                fi
+                                
+                                echo "Skipping push - no local image to push"
+                                exit 0
+                            fi
+
+                            docker logout || true
+                        '''
+                    }
                 }
             }
         }
@@ -196,12 +399,21 @@ pipeline {
         stage('Deploy to Staging') {
             when {
                 expression {
-                    env.GIT_BRANCH == 'origin/develop' || env.BRANCH_NAME == 'develop'
+                    boolean isDevelop = env.GIT_BRANCH_NAME == 'develop'
+                    echo "Deploy - branch: ${env.GIT_BRANCH_NAME}, isDevelop=${isDevelop}"
+                    return isDevelop
                 }
             }
             steps {
                 script {
                     sh '''
+                        # Check if Docker is available for deployment
+                        if ! command -v docker &> /dev/null; then
+                            echo "⚠ Docker not available - skipping staging deployment"
+                            echo "This is expected in containerized Jenkins environments"
+                            exit 0
+                        fi
+                        
                         if [ -f version.txt ]; then
                             VERSION=$(cat version.txt | cut -d= -f2)
                         else
@@ -211,10 +423,15 @@ pipeline {
                         echo "Deploying to staging environment"
                         docker stop staging-app || true
                         docker rm staging-app || true
+                        
+                        echo "Starting container: devops-testing-app:${VERSION} on port 5001"
                         docker run -d --name staging-app -p 5001:5000 devops-testing-app:${VERSION}
                         
+                        echo "Waiting for application startup..."
                         sleep 5
-                        curl -f http://localhost:5001/health || exit 1
+                        
+                        echo "Health check: testing /health endpoint"
+                        curl -f http://localhost:5001/health && echo "✓ Staging deployment successful" || { echo "✗ Health check failed"; docker logs staging-app; exit 1; }
                     '''
                 }
             }
