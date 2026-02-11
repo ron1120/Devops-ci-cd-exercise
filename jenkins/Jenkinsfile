@@ -302,8 +302,9 @@ pipeline {
                             VERSION=${BUILD_NUMBER}
                         fi
                         
-                        echo "Building Docker image: devops-testing-app:${VERSION}"
-                        docker build -t devops-testing-app:${VERSION} -f docker/Dockerfile .
+                        echo "Building Docker image: devops-testing-app:${VERSION} (linux/amd64)"
+                        docker buildx create --use --name multiarch >/dev/null 2>&1 || true
+                        docker buildx build --platform linux/amd64 -t devops-testing-app:${VERSION} -f docker/Dockerfile --load .
                         docker tag devops-testing-app:${VERSION} devops-testing-app:latest
                         echo "✓ Docker image built successfully: devops-testing-app:${VERSION}"
                     '''
