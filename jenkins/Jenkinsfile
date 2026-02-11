@@ -392,40 +392,189 @@ pipeline {
         stage('Deploy to Staging') {
             when {
                 expression {
-                    boolean isDevelop = env.GIT_BRANCH_NAME == 'develop'
-                    echo "Deploy - branch: ${env.GIT_BRANCH_NAME}, isDevelop=${isDevelop}"
+                    boolean isDevelop = env.GIT_BRANCH_NAME == 'develop' || env.GIT_BRANCH_NAME == 'main'
+                    echo "Deploy - branch: ${env.GIT_BRANCH_NAME}, isDevelop/main=${isDevelop}"
                     return isDevelop
                 }
             }
-            steps {
-                script {
-                    sh '''
-                        # Check if Docker is available for deployment
-                        if ! command -v docker &> /dev/null; then
-                            echo "⚠ Docker not available - skipping staging deployment"
-                            echo "This is expected in containerized Jenkins environments"
-                            exit 0
-                        fi
-                        
-                        if [ -f version.txt ]; then
-                            VERSION=$(cat version.txt | cut -d= -f2)
-                        else
-                            VERSION=${BUILD_NUMBER}
-                        fi
-                        
-                        echo "Deploying to staging environment"
-                        docker stop staging-app || true
-                        docker rm staging-app || true
-                        
-                        echo "Starting container: devops-testing-app:${VERSION} on port 5001"
-                        docker run -d --name staging-app -p 5001:5000 devops-testing-app:${VERSION}
-                        
-                        echo "Waiting for application startup..."
-                        sleep 5
-                        
-                        echo "Health check: testing /health endpoint"
-                        curl -f http://localhost:5001/health && echo "✓ Staging deployment successful" || { echo "✗ Health check failed"; docker logs staging-app; exit 1; }
-                    '''
+            stages {
+                stage('Terraform Init & Plan') {
+                    steps {
+                        script {
+                            withCredentials([
+                                string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
+                                string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')
+                            ]) {
+                                sh '''
+                                    echo "========================================="
+                                    echo "  Terraform Init & Plan"
+                                    echo "========================================="
+
+                                    export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}"
+                                    export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}"
+                                    export AWS_DEFAULT_REGION="us-east-1"
+
+                                    cd infrastructure/terraform
+
+                                    # Determine Docker image tag
+                                    if [ -f ../../version.txt ]; then
+                                        VERSION=$(cat ../../version.txt | cut -d= -f2)
+                                    else
+                                        VERSION="${BUILD_NUMBER}"
+                                    fi
+                                    DOCKER_IMAGE="ronsss/devops-testing-app:${VERSION}"
+
+                                    echo "Docker image for deployment: ${DOCKER_IMAGE}"
+
+                                    terraform init -input=false
+
+                                    terraform plan \
+                                        -var="docker_image=${DOCKER_IMAGE}" \
+                                        -out=tfplan \
+                                        -input=false
+
+                                    echo "✅ Terraform plan created successfully"
+                                '''
+                            }
+                        }
+                    }
+                }
+
+                stage('Terraform Apply') {
+                    steps {
+                        script {
+                            withCredentials([
+                                string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
+                                string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY')
+                            ]) {
+                                sh '''
+                                    echo "========================================="
+                                    echo "  Terraform Apply"
+                                    echo "========================================="
+
+                                    export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}"
+                                    export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}"
+                                    export AWS_DEFAULT_REGION="us-east-1"
+
+                                    cd infrastructure/terraform
+
+                                    terraform apply -auto-approve -input=false tfplan
+
+                                    echo ""
+                                    echo "--- Terraform Outputs ---"
+                                    terraform output -json > ../../terraform_outputs.json
+                                    terraform output
+                                    echo ""
+                                    echo "✅ Infrastructure provisioned successfully"
+                                '''
+                            }
+                        }
+                    }
+                }
+
+                stage('Ansible Deploy') {
+                    steps {
+                        script {
+                            withCredentials([
+                                string(credentialsId: 'AWS_ACCESS_KEY_ID', variable: 'AWS_ACCESS_KEY_ID'),
+                                string(credentialsId: 'AWS_SECRET_ACCESS_KEY', variable: 'AWS_SECRET_ACCESS_KEY'),
+                                sshUserPrivateKey(credentialsId: 'StagingSSHKey', keyFileVariable: 'SSH_KEY_FILE'),
+                                usernamePassword(credentialsId: 'RonDockerUser', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')
+                            ]) {
+                                sh '''
+                                    echo "========================================="
+                                    echo "  Ansible Deploy"
+                                    echo "========================================="
+
+                                    # Determine Docker image tag
+                                    if [ -f version.txt ]; then
+                                        VERSION=$(cat version.txt | cut -d= -f2)
+                                    else
+                                        VERSION="${BUILD_NUMBER}"
+                                    fi
+                                    DOCKER_IMAGE="ronsss/devops-testing-app:${VERSION}"
+
+                                    # Get staging IP from Terraform output
+                                    STAGING_IP=$(cat terraform_outputs.json | python3 -c "import sys,json; print(json.load(sys.stdin)['instance_public_ip']['value'])")
+                                    echo "Staging server IP: ${STAGING_IP}"
+
+                                    # Generate dynamic inventory
+                                    cat > infrastructure/ansible/inventory.ini <<INVENTORY_EOF
+[staging]
+${STAGING_IP} ansible_user=ec2-user ansible_ssh_private_key_file=${SSH_KEY_FILE}
+INVENTORY_EOF
+
+                                    echo "Waiting for SSH to become available on ${STAGING_IP}..."
+                                    for i in $(seq 1 30); do
+                                        if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "${SSH_KEY_FILE}" ec2-user@${STAGING_IP} "echo ready" >/dev/null 2>&1; then
+                                            echo "SSH is ready!"
+                                            break
+                                        fi
+                                        echo "  Attempt $i/30 - waiting 10s..."
+                                        sleep 10
+                                    done
+
+                                    # Activate Ansible venv (pre-installed in Jenkins image)
+                                    if [ -d /opt/venv ]; then
+                                        . /opt/venv/bin/activate
+                                    fi
+
+                                    # Run Ansible playbook
+                                    ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook \
+                                        -i infrastructure/ansible/inventory.ini \
+                                        infrastructure/ansible/deploy.yml \
+                                        -e "docker_image=${DOCKER_IMAGE}" \
+                                        -e "app_port=5000" \
+                                        -e "docker_hub_user=${DOCKER_USER}" \
+                                        -e "docker_hub_pass=${DOCKER_PASS}" \
+                                        -v
+
+                                    echo ""
+                                    echo "✅ Application deployed successfully!"
+                                    echo "🌐 App URL: http://${STAGING_IP}:5000"
+                                '''
+                            }
+                        }
+                    }
+                }
+
+                stage('Smoke Test') {
+                    steps {
+                        script {
+                            sh '''
+                                echo "========================================="
+                                echo "  Smoke Test"
+                                echo "========================================="
+
+                                STAGING_IP=$(cat terraform_outputs.json | python3 -c "import sys,json; print(json.load(sys.stdin)['instance_public_ip']['value'])")
+
+                                echo "Running smoke tests against http://${STAGING_IP}:5000"
+
+                                # Health check
+                                echo "1. Health check..."
+                                HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "http://${STAGING_IP}:5000/health")
+                                if [ "$HTTP_STATUS" = "200" ]; then
+                                    echo "   ✅ Health check passed (HTTP ${HTTP_STATUS})"
+                                else
+                                    echo "   ❌ Health check failed (HTTP ${HTTP_STATUS})"
+                                    exit 1
+                                fi
+
+                                # Homepage check
+                                echo "2. Homepage check..."
+                                HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "http://${STAGING_IP}:5000/")
+                                if [ "$HTTP_STATUS" = "200" ]; then
+                                    echo "   ✅ Homepage accessible (HTTP ${HTTP_STATUS})"
+                                else
+                                    echo "   ⚠ Homepage returned HTTP ${HTTP_STATUS}"
+                                fi
+
+                                echo ""
+                                echo "✅ All smoke tests passed!"
+                                echo "🌐 Staging URL: http://${STAGING_IP}:5000"
+                            '''
+                        }
+                    }
                 }
             }
         }

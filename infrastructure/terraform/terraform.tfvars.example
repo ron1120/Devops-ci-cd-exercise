@@ -1,0 +1,24 @@
+# =============================================================================
+# Example terraform.tfvars — copy to terraform.tfvars and fill in values
+# =============================================================================
+
+# AWS region to deploy into
+aws_region = "us-east-1"
+
+# Environment name (used in resource tags)
+environment = "staging"
+
+# EC2 instance type
+instance_type = "t3.micro"
+
+# Name of the AWS key pair for SSH access (must exist in the target region)
+key_name = "my-staging-key"
+
+# Docker image to deploy (override from Jenkins pipeline)
+docker_image = "ronsss/devops-testing-app:latest"
+
+# Application port
+app_port = 5000
+
+# CIDR block allowed to SSH (restrict to your IP for security)
+# allowed_ssh_cidr = "203.0.113.50/32"

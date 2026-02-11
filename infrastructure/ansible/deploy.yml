@@ -1,0 +1,99 @@
+---
+# =============================================================================
+# Ansible Playbook — Deploy Dockerized Flask App to Staging
+# =============================================================================
+- name: Deploy application to staging
+  hosts: staging
+  become: yes
+  vars:
+    docker_image: "ronsss/devops-testing-app:latest"
+    app_port: 5000
+    container_name: "devops-app"
+
+  tasks:
+    # ------------------------------------------------------------------
+    # 1. Wait for instance to be ready
+    # ------------------------------------------------------------------
+    - name: Wait for user_data to complete
+      wait_for:
+        path: /tmp/user_data_complete
+        timeout: 300
+      register: user_data_result
+      ignore_errors: yes
+
+    - name: Ensure Docker is running
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    # ------------------------------------------------------------------
+    # 2. Pull the Docker image
+    # ------------------------------------------------------------------
+    - name: Log in to Docker Hub (if private image)
+      community.docker.docker_login:
+        username: "{{ docker_hub_user | default(omit) }}"
+        password: "{{ docker_hub_pass | default(omit) }}"
+      when: docker_hub_user is defined and docker_hub_pass is defined
+      ignore_errors: yes
+
+    - name: Pull application Docker image
+      community.docker.docker_image:
+        name: "{{ docker_image }}"
+        source: pull
+        force_source: yes
+      retries: 3
+      delay: 10
+      register: pull_result
+      until: pull_result is succeeded
+
+    # ------------------------------------------------------------------
+    # 3. Stop and remove old container (if exists)
+    # ------------------------------------------------------------------
+    - name: Stop and remove existing container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: absent
+      ignore_errors: yes
+
+    # ------------------------------------------------------------------
+    # 4. Run the new container
+    # ------------------------------------------------------------------
+    - name: Start application container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        image: "{{ docker_image }}"
+        state: started
+        restart_policy: always
+        ports:
+          - "{{ app_port }}:5000"
+        env:
+          FLASK_ENV: "staging"
+        healthcheck:
+          test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+          interval: 30s
+          timeout: 10s
+          retries: 3
+          start_period: 10s
+
+    # ------------------------------------------------------------------
+    # 5. Wait for application to be healthy
+    # ------------------------------------------------------------------
+    - name: Wait for application to respond
+      uri:
+        url: "http://localhost:{{ app_port }}/health"
+        method: GET
+        status_code: 200
+      register: health_check
+      retries: 10
+      delay: 5
+      until: health_check.status == 200
+
+    - name: Display deployment info
+      debug:
+        msg: |
+          ✅ Deployment successful!
+          Image:     {{ docker_image }}
+          Container: {{ container_name }}
+          Port:      {{ app_port }}
+          Health:    {{ health_check.status }}
