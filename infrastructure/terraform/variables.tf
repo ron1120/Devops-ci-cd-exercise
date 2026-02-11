@@ -5,7 +5,7 @@
 variable "aws_region" {
   description = "AWS region for staging deployment"
   type        = string
-  default     = "us-east-1"
+  default     = "us-east-2"
 }
 
 variable "environment" {
@@ -23,6 +23,7 @@ variable "instance_type" {
 variable "key_name" {
   description = "SSH key pair name for EC2 access"
   type        = string
+  default     = "aws_key"
 }
 
 variable "app_port" {

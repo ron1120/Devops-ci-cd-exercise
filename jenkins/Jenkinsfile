@@ -408,7 +408,7 @@ pipeline {
                                     echo "========================================="
                                     echo "  Terraform Init & Plan"
                                     echo "========================================="
-                                    export AWS_DEFAULT_REGION="us-east-1"
+                                    export AWS_DEFAULT_REGION="us-east-2"
 
                                     cd infrastructure/terraform
 
@@ -446,7 +446,7 @@ pipeline {
                                     echo "========================================="
                                     echo "  Terraform Apply"
                                     echo "========================================="
-                                    export AWS_DEFAULT_REGION="us-east-1"
+                                    export AWS_DEFAULT_REGION="us-east-2"
 
                                     cd infrastructure/terraform
 
