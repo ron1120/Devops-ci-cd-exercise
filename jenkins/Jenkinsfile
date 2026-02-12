@@ -622,7 +622,7 @@ INVENTORY_EOF
                             -u "ronss1120@gmail.com:${JIRA_TOKEN}" \
                             -d '{
                                 "fields": {
-                                    "project": {"key": "RON11"},
+                                    "project": {"key": "KAN"},
                                     "summary": "⚠️ Pipeline Unstable: Build #'"${BUILD_NUMBER}"' ('"${JOB_NAME}"')",
                                     "description": {
                                         "type": "doc",
@@ -644,7 +644,7 @@ INVENTORY_EOF
                                             }
                                         ]
                                     },
-                                    "issuetype": {"name": "Bug"},
+                                    "issuetype": {"name": "Task"},
                                     "priority": {"name": "Medium"}
                                 }
                             }')
@@ -691,7 +691,7 @@ INVENTORY_EOF
                             -u "ronss1120@gmail.com:${JIRA_TOKEN}" \
                             -d '{
                                 "fields": {
-                                    "project": {"key": "RON11"},
+                                    "project": {"key": "KAN"},
                                     "summary": "❌ Pipeline Failed: Build #'"${BUILD_NUMBER}"' ('"${JOB_NAME}"')",
                                     "description": {
                                         "type": "doc",
@@ -713,7 +713,7 @@ INVENTORY_EOF
                                             }
                                         ]
                                     },
-                                    "issuetype": {"name": "Bug"},
+                                    "issuetype": {"name": "Task"},
                                     "priority": {"name": "High"}
                                 }
                             }')
