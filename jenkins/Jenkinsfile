@@ -96,11 +96,11 @@ pipeline {
 
                         if command -v python3 >/dev/null 2>&1; then
                             echo "Running unit tests using node's python3/venv"
-                            . ${VENV_DIR}/bin/activate && pytest tests/unit/ -v --cov=app --cov-report=html:htmlcov --cov-report=xml:reports/coverage.xml --cov-report=term-missing --junit-xml=reports/unit-tests.xml
+                            . ${VENV_DIR}/bin/activate && pytest tests/unit/ -v --cov=app --cov-report=html:htmlcov --cov-report=xml:reports/coverage.xml --cov-report=term-missing --junit-xml=reports/unit-tests.xml --html=reports/unit-tests-report.html --self-contained-html
 
                         elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
                             echo "Docker daemon reachable — running unit tests in python container"
-                            docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c "pip install --no-cache-dir -r requirements.txt && pytest tests/unit/ -v --cov=app --cov-report=html:htmlcov --cov-report=xml:reports/coverage.xml --cov-report=term-missing --junit-xml=reports/unit-tests.xml"
+                            docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c "pip install --no-cache-dir -r requirements.txt && pytest tests/unit/ -v --cov=app --cov-report=html:htmlcov --cov-report=xml:reports/coverage.xml --cov-report=term-missing --junit-xml=reports/unit-tests.xml --html=reports/unit-tests-report.html --self-contained-html"
 
                         else
                             echo "No usable Python3 on node and Docker daemon not reachable; cannot run unit tests"
@@ -112,7 +112,24 @@ pipeline {
             post {
                 always {
                     junit 'reports/unit-tests.xml'
-                    archiveArtifacts artifacts: 'htmlcov/**/*,reports/unit-tests.xml,reports/coverage.xml', allowEmptyArchive: false
+                    archiveArtifacts artifacts: 'htmlcov/**/*,reports/unit-tests.xml,reports/coverage.xml,reports/unit-tests-report.html', allowEmptyArchive: false
+                    publishHTML(target: [
+                        allowMissing: true,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: 'htmlcov',
+                        reportFiles: 'index.html',
+                        reportName: 'Code Coverage Report'
+                    ])
+                    publishHTML(target: [
+                        allowMissing: true,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: 'reports',
+                        reportFiles: 'unit-tests-report.html',
+                        reportName: 'Unit Test Report'
+                    ])
+                    recordCoverage(tools: [[parser: 'COBERTURA', pattern: 'reports/coverage.xml']])
                 }
             }
         }
@@ -125,11 +142,11 @@ pipeline {
 
                         if command -v python3 >/dev/null 2>&1; then
                             echo "Running integration tests using node's python3/venv"
-                            . ${VENV_DIR}/bin/activate && pytest tests/integration/ -v --junit-xml=reports/integration-tests.xml || true
+                            . ${VENV_DIR}/bin/activate && pytest tests/integration/ -v --junit-xml=reports/integration-tests.xml --html=reports/integration-tests-report.html --self-contained-html || true
 
                         elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
                             echo "Docker daemon reachable — running integration tests in python container"
-                            docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c "pip install --no-cache-dir -r requirements.txt && pytest tests/integration/ -v --junit-xml=reports/integration-tests.xml || true"
+                            docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c "pip install --no-cache-dir -r requirements.txt && pytest tests/integration/ -v --junit-xml=reports/integration-tests.xml --html=reports/integration-tests-report.html --self-contained-html || true"
 
                         else
                             echo "No usable Python3 on node and Docker daemon not reachable; cannot run integration tests"
@@ -141,7 +158,15 @@ pipeline {
             post {
                 always {
                     junit 'reports/integration-tests.xml'
-                    archiveArtifacts artifacts: 'reports/integration-tests.xml', allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'reports/integration-tests.xml,reports/integration-tests-report.html', allowEmptyArchive: true
+                    publishHTML(target: [
+                        allowMissing: true,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: 'reports',
+                        reportFiles: 'integration-tests-report.html',
+                        reportName: 'Integration Test Report'
+                    ])
                 }
             }
         }
@@ -154,11 +179,11 @@ pipeline {
 
                         if command -v python3 >/dev/null 2>&1; then
                             echo "Running end-to-end tests using node's python3/venv"
-                            . ${VENV_DIR}/bin/activate && pytest tests/e2e/ -v --junit-xml=reports/e2e-tests.xml || true
+                            . ${VENV_DIR}/bin/activate && pytest tests/e2e/ -v --junit-xml=reports/e2e-tests.xml --html=reports/e2e-tests-report.html --self-contained-html || true
 
                         elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
                             echo "Docker daemon reachable — running end-to-end tests in python container"
-                            docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c "pip install --no-cache-dir -r requirements.txt && pytest tests/e2e/ -v --junit-xml=reports/e2e-tests.xml || true"
+                            docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c "pip install --no-cache-dir -r requirements.txt && pytest tests/e2e/ -v --junit-xml=reports/e2e-tests.xml --html=reports/e2e-tests-report.html --self-contained-html || true"
 
                         else
                             echo "No usable Python3 on node and Docker daemon not reachable; cannot run end-to-end tests"
@@ -170,7 +195,15 @@ pipeline {
             post {
                 always {
                     junit 'reports/e2e-tests.xml'
-                    archiveArtifacts artifacts: 'reports/e2e-tests.xml', allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'reports/e2e-tests.xml,reports/e2e-tests-report.html', allowEmptyArchive: true
+                    publishHTML(target: [
+                        allowMissing: true,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: 'reports',
+                        reportFiles: 'e2e-tests-report.html',
+                        reportName: 'E2E Test Report'
+                    ])
                 }
             }
         }
@@ -211,6 +244,14 @@ pipeline {
             post {
                 always {
                     archiveArtifacts artifacts: 'reports/performance-report.html', allowEmptyArchive: true
+                    publishHTML(target: [
+                        allowMissing: true,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: 'reports',
+                        reportFiles: 'performance-report.html',
+                        reportName: 'Performance Test Report'
+                    ])
                 }
             }
         }
@@ -224,10 +265,11 @@ pipeline {
                         if command -v python3 >/dev/null 2>&1; then
                             echo "Running bandit using node's python3/venv"
                             . ${VENV_DIR}/bin/activate && bandit -r app/ -f json -o reports/bandit-report.json || true
+                            . ${VENV_DIR}/bin/activate && bandit -r app/ -f html -o reports/bandit-report.html || true
 
                         elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
                             echo "Docker daemon reachable — running bandit in python container"
-                            docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c "pip install --no-cache-dir -r requirements.txt && bandit -r app/ -f json -o reports/bandit-report.json || true"
+                            docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c "pip install --no-cache-dir -r requirements.txt && bandit -r app/ -f json -o reports/bandit-report.json || true; bandit -r app/ -f html -o reports/bandit-report.html || true"
 
                         else
                             echo "No usable Python3 on node and Docker daemon not reachable; cannot run security scan"
@@ -238,7 +280,15 @@ pipeline {
             }
             post {
                 always {
-                    archiveArtifacts artifacts: 'reports/bandit-report.json', allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'reports/bandit-report.json,reports/bandit-report.html', allowEmptyArchive: true
+                    publishHTML(target: [
+                        allowMissing: true,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: 'reports',
+                        reportFiles: 'bandit-report.html',
+                        reportName: 'Security Scan Report'
+                    ])
                 }
             }
         }
