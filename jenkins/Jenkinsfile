@@ -585,7 +585,7 @@ INVENTORY_EOF
                         <p>The pipeline completed successfully!</p>
                         <ul>
                             <li><strong>Build:</strong> ${env.BUILD_NUMBER}</li>
-                            <li><strong>Branch:</strong> ${env.BRANCH_NAME}</li>
+                            <li><strong>Branch:</strong> ${env.GIT_BRANCH_NAME ?: 'main'}</li>
                             <li><strong>Duration:</strong> ${currentBuild.durationString}</li>
                             <li><strong>Reports:</strong> Check the artifacts section</li>
                         </ul>
@@ -593,6 +593,75 @@ INVENTORY_EOF
                     """,
                     to: "ronss1120@gmail.com"
                 )
+            }
+        }
+        unstable {
+            script {
+                sh 'echo "Pipeline finished UNSTABLE (test failures detected)."'
+                emailext (
+                    subject: "⚠️ Pipeline Unstable: ${env.JOB_NAME} - ${env.BUILD_NUMBER}",
+                    body: """
+                        <p>The pipeline finished with test failures.</p>
+                        <ul>
+                            <li><strong>Build:</strong> ${env.BUILD_NUMBER}</li>
+                            <li><strong>Branch:</strong> ${env.GIT_BRANCH_NAME ?: 'main'}</li>
+                            <li><strong>Duration:</strong> ${currentBuild.durationString}</li>
+                            <li><strong>Result:</strong> ${currentBuild.currentResult}</li>
+                        </ul>
+                        <p><a href="${env.BUILD_URL}">View Build Details</a></p>
+                    """,
+                    to: "ronss1120@gmail.com"
+                )
+                // Create Jira Bug ticket on unstable
+                withCredentials([string(credentialsId: 'JIRA_API_TOKEN', variable: 'JIRA_TOKEN')]) {
+                    sh '''
+                        echo "Creating Jira ticket for unstable pipeline..."
+                        RESPONSE=$(curl -s -w "\\n%{http_code}" -X POST \
+                            "https://ron1120.atlassian.net/rest/api/3/issue" \
+                            -H "Content-Type: application/json" \
+                            -u "ronss1120@gmail.com:${JIRA_TOKEN}" \
+                            -d '{
+                                "fields": {
+                                    "project": {"key": "RON11"},
+                                    "summary": "⚠️ Pipeline Unstable: Build #'"${BUILD_NUMBER}"' ('"${JOB_NAME}"')",
+                                    "description": {
+                                        "type": "doc",
+                                        "version": 1,
+                                        "content": [
+                                            {
+                                                "type": "paragraph",
+                                                "content": [
+                                                    {"type": "text", "text": "Jenkins pipeline finished unstable (test failures)."},
+                                                    {"type": "hardBreak"},
+                                                    {"type": "text", "text": "Job: '"${JOB_NAME}"'"},
+                                                    {"type": "hardBreak"},
+                                                    {"type": "text", "text": "Build: #'"${BUILD_NUMBER}"'"},
+                                                    {"type": "hardBreak"},
+                                                    {"type": "text", "text": "Branch: '"${GIT_BRANCH_NAME:-main}"'"},
+                                                    {"type": "hardBreak"},
+                                                    {"type": "text", "text": "Build URL: '"${BUILD_URL}"'"}
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    "issuetype": {"name": "Bug"},
+                                    "priority": {"name": "Medium"}
+                                }
+                            }')
+
+                        HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+                        BODY=$(echo "$RESPONSE" | head -n -1)
+
+                        if [ "$HTTP_CODE" = "201" ]; then
+                            TICKET_KEY=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['key'])" 2>/dev/null)
+                            echo "✅ Jira ticket created: ${TICKET_KEY}"
+                            echo "🔗 https://ron1120.atlassian.net/browse/${TICKET_KEY}"
+                        else
+                            echo "⚠ Failed to create Jira ticket (HTTP ${HTTP_CODE})"
+                            echo "$BODY"
+                        fi
+                    '''
+                }
             }
         }
         failure {
@@ -604,9 +673,9 @@ INVENTORY_EOF
                         <p>The pipeline failed!</p>
                         <ul>
                             <li><strong>Build:</strong> ${env.BUILD_NUMBER}</li>
-                            <li><strong>Branch:</strong> ${env.BRANCH_NAME}</li>
+                            <li><strong>Branch:</strong> ${env.GIT_BRANCH_NAME ?: 'main'}</li>
                             <li><strong>Duration:</strong> ${currentBuild.durationString}</li>
-                            <li><strong>Failed Stage:</strong> ${currentBuild.currentResult}</li>
+                            <li><strong>Result:</strong> ${currentBuild.currentResult}</li>
                         </ul>
                         <p><a href="${env.BUILD_URL}">View Build Details</a></p>
                     """,
