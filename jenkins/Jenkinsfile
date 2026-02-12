@@ -591,7 +591,7 @@ INVENTORY_EOF
                         </ul>
                         <p><a href="${env.BUILD_URL}">View Build Details</a></p>
                     """,
-                    to: "${env.CHANGE_AUTHOR_EMAIL}"
+                    to: "ronss1120@gmail.com"
                 )
             }
         }
@@ -610,8 +610,58 @@ INVENTORY_EOF
                         </ul>
                         <p><a href="${env.BUILD_URL}">View Build Details</a></p>
                     """,
-                    to: "${env.CHANGE_AUTHOR_EMAIL}"
+                    to: "ronss1120@gmail.com"
                 )
+                // Create Jira Bug ticket on failure
+                withCredentials([string(credentialsId: 'JIRA_API_TOKEN', variable: 'JIRA_TOKEN')]) {
+                    sh '''
+                        echo "Creating Jira ticket for pipeline failure..."
+                        RESPONSE=$(curl -s -w "\\n%{http_code}" -X POST \
+                            "https://ron1120.atlassian.net/rest/api/3/issue" \
+                            -H "Content-Type: application/json" \
+                            -u "ronss1120@gmail.com:${JIRA_TOKEN}" \
+                            -d '{
+                                "fields": {
+                                    "project": {"key": "RON11"},
+                                    "summary": "❌ Pipeline Failed: Build #'"${BUILD_NUMBER}"' ('"${JOB_NAME}"')",
+                                    "description": {
+                                        "type": "doc",
+                                        "version": 1,
+                                        "content": [
+                                            {
+                                                "type": "paragraph",
+                                                "content": [
+                                                    {"type": "text", "text": "Jenkins pipeline failed."},
+                                                    {"type": "hardBreak"},
+                                                    {"type": "text", "text": "Job: '"${JOB_NAME}"'"},
+                                                    {"type": "hardBreak"},
+                                                    {"type": "text", "text": "Build: #'"${BUILD_NUMBER}"'"},
+                                                    {"type": "hardBreak"},
+                                                    {"type": "text", "text": "Branch: '"${GIT_BRANCH_NAME:-main}"'"},
+                                                    {"type": "hardBreak"},
+                                                    {"type": "text", "text": "Build URL: '"${BUILD_URL}"'"}
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    "issuetype": {"name": "Bug"},
+                                    "priority": {"name": "High"}
+                                }
+                            }')
+
+                        HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+                        BODY=$(echo "$RESPONSE" | head -n -1)
+
+                        if [ "$HTTP_CODE" = "201" ]; then
+                            TICKET_KEY=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['key'])" 2>/dev/null)
+                            echo "✅ Jira ticket created: ${TICKET_KEY}"
+                            echo "🔗 https://ron1120.atlassian.net/browse/${TICKET_KEY}"
+                        else
+                            echo "⚠ Failed to create Jira ticket (HTTP ${HTTP_CODE})"
+                            echo "$BODY"
+                        fi
+                    '''
+                }
             }
         }
     }
