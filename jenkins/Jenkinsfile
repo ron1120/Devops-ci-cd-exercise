@@ -592,7 +592,7 @@ INVENTORY_EOF
                         <p>📎 Check the <a href="${env.BUILD_URL}artifact/">build artifacts</a> for reports.</p>
                         <p><a href="${env.BUILD_URL}">🔗 View Full Build Details</a></p>
                     """,
-                    to: "ronss1120@gmail.com",
+                    to: "whtestore@gmail.com",
                     mimeType: 'text/html'
                 )
             }
@@ -621,7 +621,7 @@ INVENTORY_EOF
                         <p><a href="${env.BUILD_URL}testReport/">🧪 View Test Report</a></p>
                         <p><a href="${env.BUILD_URL}">🔗 View Full Build Details</a></p>
                     """,
-                    to: "ronss1120@gmail.com",
+                    to: "whtestore@gmail.com",
                     mimeType: 'text/html'
                 )
                 // Create Jira Bug ticket on unstable
@@ -703,7 +703,7 @@ INVENTORY_EOF
                         <p><a href="${env.BUILD_URL}console">📋 View Console Output</a></p>
                         <p><a href="${env.BUILD_URL}">🔗 View Full Build Details</a></p>
                     """,
-                    to: "ronss1120@gmail.com",
+                    to: "whtestore@gmail.com",
                     mimeType: 'text/html'
                 )
                 // Create Jira Bug ticket on failure
