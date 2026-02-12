@@ -600,13 +600,7 @@ INVENTORY_EOF
         unstable {
             script {
                 sh 'echo "Pipeline finished UNSTABLE (test failures detected)."'
-                def failedStages = []
-                currentBuild.rawBuild?.actions?.findAll { it instanceof hudson.tasks.junit.TestResultAction }?.each { action ->
-                    if (action.failCount > 0) {
-                        failedStages.add("Tests: ${action.failCount} failure(s)")
-                    }
-                }
-                def failedStageText = failedStages ? failedStages.join(', ') : 'Test stage(s) had failures'
+                def failedStageText = 'Test stage(s) had failures'
                 emailext (
                     subject: "⚠️ Pipeline Unstable: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
                     body: """
@@ -679,16 +673,7 @@ INVENTORY_EOF
         failure {
             script {
                 sh 'echo "Pipeline failed!"'
-                def failedStageName = 'Unknown'
-                currentBuild.rawBuild?.actions?.each { action ->
-                    if (action.getClass().name.contains('FlowGraphAction')) {
-                        action.nodes?.each { node ->
-                            if (node.error != null) {
-                                failedStageName = node.displayName ?: 'Unknown'
-                            }
-                        }
-                    }
-                }
+                def failedStageName = env.STAGE_NAME ?: 'Unknown'
                 emailext (
                     subject: "❌ Pipeline FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
                     body: """
