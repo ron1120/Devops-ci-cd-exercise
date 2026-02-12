@@ -580,37 +580,49 @@ INVENTORY_EOF
             script {
                 sh 'echo "Pipeline completed successfully!"'
                 emailext (
-                    subject: "✅ Pipeline Success: ${env.JOB_NAME} - ${env.BUILD_NUMBER}",
+                    subject: "✅ Pipeline Success: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
                     body: """
-                        <p>The pipeline completed successfully!</p>
-                        <ul>
-                            <li><strong>Build:</strong> ${env.BUILD_NUMBER}</li>
-                            <li><strong>Branch:</strong> ${env.GIT_BRANCH_NAME ?: 'main'}</li>
-                            <li><strong>Duration:</strong> ${currentBuild.durationString}</li>
-                            <li><strong>Reports:</strong> Check the artifacts section</li>
-                        </ul>
-                        <p><a href="${env.BUILD_URL}">View Build Details</a></p>
+                        <h2>✅ Pipeline Completed Successfully</h2>
+                        <table style="border-collapse:collapse; width:100%; max-width:600px;">
+                            <tr><td style="padding:8px; border:1px solid #ddd;"><strong>Build Number</strong></td><td style="padding:8px; border:1px solid #ddd;">#${env.BUILD_NUMBER}</td></tr>
+                            <tr><td style="padding:8px; border:1px solid #ddd;"><strong>Branch</strong></td><td style="padding:8px; border:1px solid #ddd;">${env.GIT_BRANCH_NAME ?: 'main'}</td></tr>
+                            <tr><td style="padding:8px; border:1px solid #ddd;"><strong>Duration</strong></td><td style="padding:8px; border:1px solid #ddd;">${currentBuild.durationString}</td></tr>
+                            <tr><td style="padding:8px; border:1px solid #ddd;"><strong>Status</strong></td><td style="padding:8px; border:1px solid #ddd; color:green;">SUCCESS</td></tr>
+                        </table>
+                        <p>📎 Check the <a href="${env.BUILD_URL}artifact/">build artifacts</a> for reports.</p>
+                        <p><a href="${env.BUILD_URL}">🔗 View Full Build Details</a></p>
                     """,
-                    to: "ronss1120@gmail.com"
+                    to: "ronss1120@gmail.com",
+                    mimeType: 'text/html'
                 )
             }
         }
         unstable {
             script {
                 sh 'echo "Pipeline finished UNSTABLE (test failures detected)."'
+                def failedStages = []
+                currentBuild.rawBuild?.actions?.findAll { it instanceof hudson.tasks.junit.TestResultAction }?.each { action ->
+                    if (action.failCount > 0) {
+                        failedStages.add("Tests: ${action.failCount} failure(s)")
+                    }
+                }
+                def failedStageText = failedStages ? failedStages.join(', ') : 'Test stage(s) had failures'
                 emailext (
-                    subject: "⚠️ Pipeline Unstable: ${env.JOB_NAME} - ${env.BUILD_NUMBER}",
+                    subject: "⚠️ Pipeline Unstable: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
                     body: """
-                        <p>The pipeline finished with test failures.</p>
-                        <ul>
-                            <li><strong>Build:</strong> ${env.BUILD_NUMBER}</li>
-                            <li><strong>Branch:</strong> ${env.GIT_BRANCH_NAME ?: 'main'}</li>
-                            <li><strong>Duration:</strong> ${currentBuild.durationString}</li>
-                            <li><strong>Result:</strong> ${currentBuild.currentResult}</li>
-                        </ul>
-                        <p><a href="${env.BUILD_URL}">View Build Details</a></p>
+                        <h2>⚠️ Pipeline Finished Unstable</h2>
+                        <table style="border-collapse:collapse; width:100%; max-width:600px;">
+                            <tr><td style="padding:8px; border:1px solid #ddd;"><strong>Build Number</strong></td><td style="padding:8px; border:1px solid #ddd;">#${env.BUILD_NUMBER}</td></tr>
+                            <tr><td style="padding:8px; border:1px solid #ddd;"><strong>Branch</strong></td><td style="padding:8px; border:1px solid #ddd;">${env.GIT_BRANCH_NAME ?: 'main'}</td></tr>
+                            <tr><td style="padding:8px; border:1px solid #ddd;"><strong>Duration</strong></td><td style="padding:8px; border:1px solid #ddd;">${currentBuild.durationString}</td></tr>
+                            <tr><td style="padding:8px; border:1px solid #ddd;"><strong>Failed Stage</strong></td><td style="padding:8px; border:1px solid #ddd; color:orange;">${failedStageText}</td></tr>
+                            <tr><td style="padding:8px; border:1px solid #ddd;"><strong>Status</strong></td><td style="padding:8px; border:1px solid #ddd; color:orange;">UNSTABLE</td></tr>
+                        </table>
+                        <p><a href="${env.BUILD_URL}testReport/">🧪 View Test Report</a></p>
+                        <p><a href="${env.BUILD_URL}">🔗 View Full Build Details</a></p>
                     """,
-                    to: "ronss1120@gmail.com"
+                    to: "ronss1120@gmail.com",
+                    mimeType: 'text/html'
                 )
                 // Create Jira Bug ticket on unstable
                 withCredentials([string(credentialsId: 'JIRA_API_TOKEN', variable: 'JIRA_TOKEN')]) {
@@ -667,19 +679,32 @@ INVENTORY_EOF
         failure {
             script {
                 sh 'echo "Pipeline failed!"'
+                def failedStageName = 'Unknown'
+                currentBuild.rawBuild?.actions?.each { action ->
+                    if (action.getClass().name.contains('FlowGraphAction')) {
+                        action.nodes?.each { node ->
+                            if (node.error != null) {
+                                failedStageName = node.displayName ?: 'Unknown'
+                            }
+                        }
+                    }
+                }
                 emailext (
-                    subject: "❌ Pipeline Failure: ${env.JOB_NAME} - ${env.BUILD_NUMBER}",
+                    subject: "❌ Pipeline FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
                     body: """
-                        <p>The pipeline failed!</p>
-                        <ul>
-                            <li><strong>Build:</strong> ${env.BUILD_NUMBER}</li>
-                            <li><strong>Branch:</strong> ${env.GIT_BRANCH_NAME ?: 'main'}</li>
-                            <li><strong>Duration:</strong> ${currentBuild.durationString}</li>
-                            <li><strong>Result:</strong> ${currentBuild.currentResult}</li>
-                        </ul>
-                        <p><a href="${env.BUILD_URL}">View Build Details</a></p>
+                        <h2>❌ Pipeline Failed</h2>
+                        <table style="border-collapse:collapse; width:100%; max-width:600px;">
+                            <tr><td style="padding:8px; border:1px solid #ddd;"><strong>Build Number</strong></td><td style="padding:8px; border:1px solid #ddd;">#${env.BUILD_NUMBER}</td></tr>
+                            <tr><td style="padding:8px; border:1px solid #ddd;"><strong>Branch</strong></td><td style="padding:8px; border:1px solid #ddd;">${env.GIT_BRANCH_NAME ?: 'main'}</td></tr>
+                            <tr><td style="padding:8px; border:1px solid #ddd;"><strong>Duration</strong></td><td style="padding:8px; border:1px solid #ddd;">${currentBuild.durationString}</td></tr>
+                            <tr><td style="padding:8px; border:1px solid #ddd;"><strong>Failed Stage</strong></td><td style="padding:8px; border:1px solid #ddd; color:red;">${failedStageName}</td></tr>
+                            <tr><td style="padding:8px; border:1px solid #ddd;"><strong>Status</strong></td><td style="padding:8px; border:1px solid #ddd; color:red;">FAILURE</td></tr>
+                        </table>
+                        <p><a href="${env.BUILD_URL}console">📋 View Console Output</a></p>
+                        <p><a href="${env.BUILD_URL}">🔗 View Full Build Details</a></p>
                     """,
-                    to: "ronss1120@gmail.com"
+                    to: "ronss1120@gmail.com",
+                    mimeType: 'text/html'
                 )
                 // Create Jira Bug ticket on failure
                 withCredentials([string(credentialsId: 'JIRA_API_TOKEN', variable: 'JIRA_TOKEN')]) {
