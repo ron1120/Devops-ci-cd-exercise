@@ -1,142 +1,139 @@
+// =============================================================================
+// CI/CD Pipeline — Checkout → Lint → Test → Security → Docker → Deploy (AWS)
+// =============================================================================
+
 pipeline {
     agent any
-    
+
     options {
         buildDiscarder(logRotator(numToKeepStr: '10'))
         timeout(time: 1, unit: 'HOURS')
     }
-    
+
     environment {
         PYTHON_VERSION = '3'
-        VENV_DIR = 'venv'
-        GIT_REPO = 'https://github.com/ron1120/Devops-ci-cd-exercise.git'
+        VENV_DIR       = 'venv'
+        GIT_REPO       = 'https://github.com/ron1120/Devops-ci-cd-exercise.git'
     }
-    
-    triggers {
-        githubPush()
-    }
-    
+
+    triggers { githubPush() }
+
     stages {
+
+        // ── 1. Checkout ──────────────────────────────────────────────────
         stage('Checkout') {
             steps {
                 script {
-                    sh 'echo "Checking out repository from GitHub"'
-                    git branch: 'main', credentialsId: 'RonGitUser', url: 'https://github.com/ron1120/Devops-ci-cd-exercise.git'
-                    env.GIT_BRANCH_NAME = sh(script: 'git rev-parse --abbrev-ref HEAD || echo "main"', returnStdout: true).trim()
-                    if (env.GIT_BRANCH_NAME == 'HEAD') {
-                        env.GIT_BRANCH_NAME = 'main'
-                    }
-                    echo "Git branch detected: ${env.GIT_BRANCH_NAME}"
+                    git branch: 'main', credentialsId: 'RonGitUser', url: env.GIT_REPO
+
+                    env.GIT_BRANCH_NAME = sh(
+                        script: 'git rev-parse --abbrev-ref HEAD || echo main',
+                        returnStdout: true
+                    ).trim()
+
+                    if (env.GIT_BRANCH_NAME == 'HEAD') { env.GIT_BRANCH_NAME = 'main' }
+                    echo "Branch: ${env.GIT_BRANCH_NAME}"
                 }
             }
         }
         
+        // ── 2. Setup Environment ──────────────────────────────────────
         stage('Setup Environment') {
             steps {
-                script {
-                    sh '''
-                        echo "Setting up Python environment"
+                sh '''
+                    if command -v python3 >/dev/null 2>&1; then
+                        python${PYTHON_VERSION} -m venv ${VENV_DIR}
+                        . ${VENV_DIR}/bin/activate && pip install --upgrade pip
+                        . ${VENV_DIR}/bin/activate && pip install -r requirements.txt
 
-                        # Prefer using node's python3 if present (no Docker API required)
-                        if command -v python3 >/dev/null 2>&1; then
-                            echo "python3 available on node — creating venv locally"
-                            python${PYTHON_VERSION} -m venv ${VENV_DIR}
-                            . ${VENV_DIR}/bin/activate && pip install --upgrade pip
-                            . ${VENV_DIR}/bin/activate && pip install -r requirements.txt
-
-                        # Otherwise, use Docker only if the Docker daemon is reachable
-                        elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-                            echo "Docker daemon reachable — using python:3.11-slim to create venv"
-                            docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c "python${PYTHON_VERSION} -m venv ${VENV_DIR} && . ${VENV_DIR}/bin/activate && pip install --upgrade pip && pip install -r requirements.txt"
-
-                        else
-                            echo "No usable Python3 on node and Docker daemon not reachable; cannot set up Python environment"
-                            echo "Please configure your Jenkins agent to have Python3, or enable Docker daemon access for this container/agent."
-                            exit 1
-                        fi
-                    '''
-                }
+                    elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+                        docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c \
+                            "python${PYTHON_VERSION} -m venv ${VENV_DIR} \
+                             && . ${VENV_DIR}/bin/activate \
+                             && pip install --upgrade pip \
+                             && pip install -r requirements.txt"
+                    else
+                        echo "No python3 or Docker available"; exit 1
+                    fi
+                '''
             }
         }
         
+        // ── 3. Lint Code ──────────────────────────────────────────────
         stage('Lint Code') {
             steps {
-                script {
-                    sh '''
-                        mkdir -p reports
+                sh '''
+                    mkdir -p reports
 
-                        if command -v python3 >/dev/null 2>&1; then
-                            echo "Running linters using node's python3/venv"
-                            . ${VENV_DIR}/bin/activate && flake8 app/ --output-file=reports/flake8.txt || true
-                            . ${VENV_DIR}/bin/activate && pylint app/ --output=reports/pylint.txt || true
+                    if command -v python3 >/dev/null 2>&1; then
+                        . ${VENV_DIR}/bin/activate
+                        flake8 app/ --output-file=reports/flake8.txt || true
+                        pylint app/ --output=reports/pylint.txt      || true
 
-                        elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-                            echo "Docker daemon reachable — running linters in python:3.11-slim container"
-                            docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c "pip install --no-cache-dir -r requirements.txt && flake8 app/ --output-file=reports/flake8.txt || true; pylint app/ --output=reports/pylint.txt || true"
-
-                        else
-                            echo "No usable Python3 on node and Docker daemon not reachable; cannot run linters"
-                            exit 1
-                        fi
-                    '''
-                }
+                    elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+                        docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c \
+                            "pip install --no-cache-dir -r requirements.txt \
+                             && flake8 app/ --output-file=reports/flake8.txt || true \
+                             && pylint app/ --output=reports/pylint.txt      || true"
+                    else
+                        echo "Cannot run linters"; exit 1
+                    fi
+                '''
             }
             post {
-                always {
-                    archiveArtifacts artifacts: 'reports/*.txt', allowEmptyArchive: true
-                }
+                always { archiveArtifacts artifacts: 'reports/*.txt', allowEmptyArchive: true }
             }
         }
         
+        // ── 4. Unit Tests ─────────────────────────────────────────────
         stage('Unit Tests') {
             steps {
-                script {
-                    sh '''
-                        mkdir -p reports htmlcov
+                sh '''
+                    mkdir -p reports htmlcov
+                    PYTEST_ARGS="tests/unit/ -v \
+                        --cov=app \
+                        --cov-report=html:htmlcov \
+                        --cov-report=xml:reports/coverage.xml \
+                        --cov-report=term-missing \
+                        --junit-xml=reports/unit-tests.xml"
 
-                        if command -v python3 >/dev/null 2>&1; then
-                            echo "Running unit tests using node's python3/venv"
-                            . ${VENV_DIR}/bin/activate && pytest tests/unit/ -v --cov=app --cov-report=html:htmlcov --cov-report=xml:reports/coverage.xml --cov-report=term-missing --junit-xml=reports/unit-tests.xml
+                    if command -v python3 >/dev/null 2>&1; then
+                        . ${VENV_DIR}/bin/activate && pytest ${PYTEST_ARGS}
 
-                        elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-                            echo "Docker daemon reachable — running unit tests in python container"
-                            docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c "pip install --no-cache-dir -r requirements.txt && pytest tests/unit/ -v --cov=app --cov-report=html:htmlcov --cov-report=xml:reports/coverage.xml --cov-report=term-missing --junit-xml=reports/unit-tests.xml"
-
-                        else
-                            echo "No usable Python3 on node and Docker daemon not reachable; cannot run unit tests"
-                            exit 1
-                        fi
-                    '''
-                }
+                    elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+                        docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c \
+                            "pip install --no-cache-dir -r requirements.txt && pytest ${PYTEST_ARGS}"
+                    else
+                        echo "Cannot run unit tests"; exit 1
+                    fi
+                '''
             }
             post {
                 always {
                     junit 'reports/unit-tests.xml'
-                    archiveArtifacts artifacts: 'htmlcov/**/*,reports/unit-tests.xml,reports/coverage.xml', allowEmptyArchive: false
+                    archiveArtifacts artifacts: 'htmlcov/**/*,reports/unit-tests.xml,reports/coverage.xml',
+                                     allowEmptyArchive: false
                 }
             }
         }
         
+        // ── 5. Integration Tests ──────────────────────────────────────
         stage('Integration Tests') {
             steps {
-                script {
-                    sh '''
-                        mkdir -p reports
+                sh '''
+                    mkdir -p reports
+                    if command -v python3 >/dev/null 2>&1; then
+                        . ${VENV_DIR}/bin/activate
+                        pytest tests/integration/ -v --junit-xml=reports/integration-tests.xml || true
 
-                        if command -v python3 >/dev/null 2>&1; then
-                            echo "Running integration tests using node's python3/venv"
-                            . ${VENV_DIR}/bin/activate && pytest tests/integration/ -v --junit-xml=reports/integration-tests.xml || true
-
-                        elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-                            echo "Docker daemon reachable — running integration tests in python container"
-                            docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c "pip install --no-cache-dir -r requirements.txt && pytest tests/integration/ -v --junit-xml=reports/integration-tests.xml || true"
-
-                        else
-                            echo "No usable Python3 on node and Docker daemon not reachable; cannot run integration tests"
-                            exit 1
-                        fi
-                    '''
-                }
+                    elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+                        docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c \
+                            "pip install --no-cache-dir -r requirements.txt \
+                             && pytest tests/integration/ -v --junit-xml=reports/integration-tests.xml || true"
+                    else
+                        echo "Cannot run integration tests"; exit 1
+                    fi
+                '''
             }
             post {
                 always {
@@ -146,26 +143,23 @@ pipeline {
             }
         }
         
+        // ── 6. End-to-End Tests ──────────────────────────────────────
         stage('End-to-End Tests') {
             steps {
-                script {
-                    sh '''
-                        mkdir -p reports
+                sh '''
+                    mkdir -p reports
+                    if command -v python3 >/dev/null 2>&1; then
+                        . ${VENV_DIR}/bin/activate
+                        pytest tests/e2e/ -v --junit-xml=reports/e2e-tests.xml || true
 
-                        if command -v python3 >/dev/null 2>&1; then
-                            echo "Running end-to-end tests using node's python3/venv"
-                            . ${VENV_DIR}/bin/activate && pytest tests/e2e/ -v --junit-xml=reports/e2e-tests.xml || true
-
-                        elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-                            echo "Docker daemon reachable — running end-to-end tests in python container"
-                            docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c "pip install --no-cache-dir -r requirements.txt && pytest tests/e2e/ -v --junit-xml=reports/e2e-tests.xml || true"
-
-                        else
-                            echo "No usable Python3 on node and Docker daemon not reachable; cannot run end-to-end tests"
-                            exit 1
-                        fi
-                    '''
-                }
+                    elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+                        docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c \
+                            "pip install --no-cache-dir -r requirements.txt \
+                             && pytest tests/e2e/ -v --junit-xml=reports/e2e-tests.xml || true"
+                    else
+                        echo "Cannot run E2E tests"; exit 1
+                    fi
+                '''
             }
             post {
                 always {
@@ -175,569 +169,373 @@ pipeline {
             }
         }
         
+        // ── 7. Performance Tests (production only) ────────────────────
         stage('Performance Tests') {
-            when {
-                expression {
-                    boolean isProduction = env.GIT_BRANCH_NAME == 'production'
-                    echo "Performance tests - branch: ${env.GIT_BRANCH_NAME}, isProduction=${isProduction}"
-                    return isProduction
-                }
-            }
+            when { expression { return env.GIT_BRANCH_NAME == 'production' } }
             steps {
-                script {
-                    sh '''
-                        mkdir -p reports
+                sh '''
+                    mkdir -p reports
+                    LOCUST_ARGS="-f tests/performance/locustfile.py --headless \
+                        --users 10 --spawn-rate 2 --run-time 30s \
+                        --host http://localhost:5000 \
+                        --html reports/performance-report.html"
 
-                        if command -v python3 >/dev/null 2>&1; then
-                            echo "Running performance tests using node's python3/venv"
-                            . ${VENV_DIR}/bin/activate
-                            python main.py &
-                            APP_PID=$!
-                            sleep 5
-                            locust -f tests/performance/locustfile.py --headless --users 10 --spawn-rate 2 --run-time 30s --host http://localhost:5000 --html reports/performance-report.html || true
-                            kill $APP_PID || true
+                    if command -v python3 >/dev/null 2>&1; then
+                        . ${VENV_DIR}/bin/activate
+                        python main.py & APP_PID=$!; sleep 5
+                        locust ${LOCUST_ARGS} || true
+                        kill $APP_PID || true
 
-                        elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-                            echo "Docker daemon reachable — running performance tests in python container"
-                            docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c "pip install --no-cache-dir -r requirements.txt && python main.py & APP_PID=$!; sleep 5; locust -f tests/performance/locustfile.py --headless --users 10 --spawn-rate 2 --run-time 30s --host http://localhost:5000 --html reports/performance-report.html || true; kill $APP_PID || true"
-
-                        else
-                            echo "No usable Python3 on node and Docker daemon not reachable; cannot run performance tests"
-                            exit 1
-                        fi
-                    '''
-                }
+                    elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+                        docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c \
+                            "pip install --no-cache-dir -r requirements.txt \
+                             && python main.py & APP_PID=\$!; sleep 5; \
+                             locust ${LOCUST_ARGS} || true; \
+                             kill \$APP_PID || true"
+                    else
+                        echo "Cannot run performance tests"; exit 1
+                    fi
+                '''
             }
             post {
-                always {
-                    archiveArtifacts artifacts: 'reports/performance-report.html', allowEmptyArchive: true
-                }
+                always { archiveArtifacts artifacts: 'reports/performance-report.html', allowEmptyArchive: true }
             }
         }
         
+        // ── 8. Security Scan ──────────────────────────────────────────
         stage('Security Scan') {
             steps {
-                script {
-                    sh '''
-                        mkdir -p reports
+                sh '''
+                    mkdir -p reports
+                    if command -v python3 >/dev/null 2>&1; then
+                        . ${VENV_DIR}/bin/activate
+                        bandit -r app/ -f json -o reports/bandit-report.json || true
 
-                        if command -v python3 >/dev/null 2>&1; then
-                            echo "Running bandit using node's python3/venv"
-                            . ${VENV_DIR}/bin/activate && bandit -r app/ -f json -o reports/bandit-report.json || true
-
-                        elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-                            echo "Docker daemon reachable — running bandit in python container"
-                            docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c "pip install --no-cache-dir -r requirements.txt && bandit -r app/ -f json -o reports/bandit-report.json || true"
-
-                        else
-                            echo "No usable Python3 on node and Docker daemon not reachable; cannot run security scan"
-                            exit 1
-                        fi
-                    '''
-                }
+                    elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+                        docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c \
+                            "pip install --no-cache-dir -r requirements.txt \
+                             && bandit -r app/ -f json -o reports/bandit-report.json || true"
+                    else
+                        echo "Cannot run security scan"; exit 1
+                    fi
+                '''
             }
             post {
-                always {
-                    archiveArtifacts artifacts: 'reports/bandit-report.json', allowEmptyArchive: true
-                }
+                always { archiveArtifacts artifacts: 'reports/bandit-report.json', allowEmptyArchive: true }
             }
         }
         
+        // ── 9. Create Version Tag (main/develop) ────────────────────
         stage('Create Version Tag') {
-            when {
-                expression {
-                    boolean isMainOrDevelop = env.GIT_BRANCH_NAME == 'main' || env.GIT_BRANCH_NAME == 'develop'
-                    echo "Version tag - branch: ${env.GIT_BRANCH_NAME}, isMainOrDevelop=${isMainOrDevelop}"
-                    return isMainOrDevelop
-                }
-            }
+            when { expression { return env.GIT_BRANCH_NAME in ['main', 'develop'] } }
             steps {
-                script {
-                    withCredentials([usernamePassword(credentialsId: 'RonGitUser', passwordVariable: 'GIT_PASSWORD', usernameVariable: 'GIT_USERNAME')]) {
-                        sh '''
-                            git config user.email "jenkins@example.com"
-                            git config user.name "Jenkins CI"
-                            VERSION=$(date +%Y.%m.%d.%H%M%S)
-                            git tag -a v$VERSION -m "Release version $VERSION" || true
-                            echo "VERSION=$VERSION" > version.txt
-                            echo "✓ Version tag created locally: v$VERSION"
-                            echo "Note: Git push requires SSH keys or PAT configuration in Jenkins"
-                        '''
-                    }
+                withCredentials([usernamePassword(credentialsId: 'RonGitUser', passwordVariable: 'GIT_PASSWORD', usernameVariable: 'GIT_USERNAME')]) {
+                    sh '''
+                        git config user.email "jenkins@example.com"
+                        git config user.name  "Jenkins CI"
+                        VERSION=$(date +%Y.%m.%d.%H%M%S)
+                        git tag -a v$VERSION -m "Release version $VERSION" || true
+                        echo "VERSION=$VERSION" > version.txt
+                        echo "✓ Version tag: v$VERSION"
+                    '''
                 }
             }
             post {
-                always {
-                    archiveArtifacts artifacts: 'version.txt', allowEmptyArchive: true
-                }
+                always { archiveArtifacts artifacts: 'version.txt', allowEmptyArchive: true }
             }
         }
         
+        // ── 10. Build Docker Image (main/develop) ─────────────────
         stage('Build Docker Image') {
-            when {
-                expression {
-                    boolean isMainOrDevelop = env.GIT_BRANCH_NAME == 'main' || env.GIT_BRANCH_NAME == 'develop'
-                    echo "Docker build - branch: ${env.GIT_BRANCH_NAME}, isMainOrDevelop=${isMainOrDevelop}"
-                    return isMainOrDevelop
-                }
-            }
+            when { expression { return env.GIT_BRANCH_NAME in ['main', 'develop'] } }
             steps {
-                script {
-                    sh '''
-                        # Check if Docker CLI is available
-                        if ! command -v docker >/dev/null 2>&1; then
-                            echo "⚠ Docker CLI not available - skipping build"
-                            exit 0
-                        fi
-                        
-                        # Check Docker daemon availability
-                        if ! docker info >/dev/null 2>&1; then
-                            echo "⚠ Docker daemon not reachable - skipping build"
-                            exit 0
-                        fi
-                        
-                        if [ -f version.txt ]; then
-                            VERSION=$(cat version.txt | cut -d= -f2)
-                        else
-                            VERSION=${BUILD_NUMBER}
-                        fi
-                        
-                        echo "Building Docker image: devops-testing-app:${VERSION} (linux/amd64)"
-                        docker buildx create --use --name multiarch >/dev/null 2>&1 || true
-                        docker buildx build --platform linux/amd64 -t devops-testing-app:${VERSION} -f docker/Dockerfile --load .
-                        docker tag devops-testing-app:${VERSION} devops-testing-app:latest
-                        echo "✓ Docker image built successfully: devops-testing-app:${VERSION}"
-                    '''
-                }
+                sh '''
+                    if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+                        echo "⚠ Docker not available — skipping build"; exit 0
+                    fi
+
+                    VERSION=$(cut -d= -f2 version.txt 2>/dev/null || echo ${BUILD_NUMBER})
+
+                    echo "Building devops-testing-app:${VERSION} (linux/amd64)"
+                    docker buildx create --use --name multiarch >/dev/null 2>&1 || true
+                    docker buildx build --platform linux/amd64 \
+                        -t devops-testing-app:${VERSION} \
+                        -f docker/Dockerfile --load .
+                    docker tag devops-testing-app:${VERSION} devops-testing-app:latest
+                    echo "✓ Built: devops-testing-app:${VERSION}"
+                '''
             }
         }
 
+        // ── 11. Push Docker Image (main/develop) ──────────────────
         stage('Push Docker Image') {
-            when {
-                expression {
-                    boolean isMainOrDevelop = env.GIT_BRANCH_NAME == 'main' || env.GIT_BRANCH_NAME == 'develop'
-                    echo "Docker push - branch: ${env.GIT_BRANCH_NAME}, isMainOrDevelop=${isMainOrDevelop}"
-                    return isMainOrDevelop
-                }
-            }
+            when { expression { return env.GIT_BRANCH_NAME in ['main', 'develop'] } }
             steps {
-                script {
+                withCredentials([usernamePassword(credentialsId: 'RonDockerUser', usernameVariable: 'DOCKERHUB_USER', passwordVariable: 'DOCKERHUB_PASS')]) {
                     sh '''
-                        # Check if Docker CLI is available
-                        if ! command -v docker >/dev/null 2>&1; then
-                            echo "⚠ Docker CLI not available - skipping push"
-                            exit 0
-                        fi
-                        
-                        # Check Docker daemon availability
-                        if ! docker info >/dev/null 2>&1; then
-                            echo "⚠ Docker daemon not reachable - skipping push"
-                            exit 0
-                        fi
-                        
-                        # Determine version: try git tag, then version.txt, then BUILD_NUMBER
-                        VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || cat version.txt 2>/dev/null | cut -d= -f2 || echo "${BUILD_NUMBER}")
-                        
-                        if [ -z "$VERSION" ] || [ "$VERSION" = "${BUILD_NUMBER}" ] && ! [ -f version.txt ]; then
-                            VERSION=${BUILD_NUMBER}
+                        if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+                            echo "⚠ Docker not available — skipping push"; exit 0
                         fi
 
-                        echo "Preparing to push devops-testing-app:${VERSION} to Docker Hub"
+                        VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' \
+                            || cut -d= -f2 version.txt 2>/dev/null \
+                            || echo "${BUILD_NUMBER}")
+                        [ -z "$VERSION" ] && VERSION=${BUILD_NUMBER}
+
+                        echo "Pushing devops-testing-app:${VERSION}"
+                        echo "$DOCKERHUB_PASS" | docker login -u "$DOCKERHUB_USER" --password-stdin
+
+                        if docker image inspect devops-testing-app:${VERSION} >/dev/null 2>&1; then
+                            docker tag devops-testing-app:${VERSION} ${DOCKERHUB_USER}/devops-testing-app:${VERSION}
+                            docker tag devops-testing-app:${VERSION} ${DOCKERHUB_USER}/devops-testing-app:latest
+                            docker push ${DOCKERHUB_USER}/devops-testing-app:${VERSION}
+                            docker push ${DOCKERHUB_USER}/devops-testing-app:latest
+                            echo "✓ Pushed: ${DOCKERHUB_USER}/devops-testing-app:${VERSION}"
+                        else
+                            echo "⚠ Image not found locally — skipping push"
+                        fi
+
+                        docker logout || true
                     '''
-
-                    // Use Docker Hub credentials stored in Jenkins (username/password)
-                    withCredentials([usernamePassword(credentialsId: 'RonDockerUser', usernameVariable: 'DOCKERHUB_USER', passwordVariable: 'DOCKERHUB_PASS')]) {
-                        sh '''
-                            # Re-determine VERSION for this shell context
-                            VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || cat version.txt 2>/dev/null | cut -d= -f2 || echo "${BUILD_NUMBER}")
-                            if [ -z "$VERSION" ]; then
-                                VERSION=${BUILD_NUMBER}
-                            fi
-                            
-                            echo "Using VERSION=${VERSION}"
-                            
-                            echo "$DOCKERHUB_PASS" | docker login -u "$DOCKERHUB_USER" --password-stdin
-
-                            # Try to inspect and push; if socket error, provide diagnostic info
-                            if docker image inspect devops-testing-app:${VERSION} >/dev/null 2>&1; then
-                                docker tag devops-testing-app:${VERSION} ${DOCKERHUB_USER}/devops-testing-app:${VERSION}
-                                docker tag devops-testing-app:${VERSION} ${DOCKERHUB_USER}/devops-testing-app:latest
-                                docker push ${DOCKERHUB_USER}/devops-testing-app:${VERSION}
-                                docker push ${DOCKERHUB_USER}/devops-testing-app:latest
-                                echo "✓ Pushed images to Docker Hub: ${DOCKERHUB_USER}/devops-testing-app:${VERSION} and :latest"
-                            else
-                                INSPECT_ERROR=$?
-                                echo "⚠ Could not inspect image devops-testing-app:${VERSION} (error code: $INSPECT_ERROR)"
-                                
-                                # Try to list images to diagnose socket vs. missing image issue
-                                echo "Checking available images:"
-                                if docker images devops-testing-app 2>&1; then
-                                    echo "No local devops-testing-app images found - build stage likely failed or was skipped"
-                                    echo "This may occur if Docker socket is not accessible to Jenkins"
-                                else
-                                    echo "⚠ Cannot list Docker images - socket permission issue detected"
-                                    echo "Solution: Restart Jenkins container with: docker run -v /var/run/docker.sock:/var/run/docker.sock --group-add \$(stat -c '%g' /var/run/docker.sock) ..."
-                                fi
-                                
-                                echo "Skipping push - no local image to push"
-                                exit 0
-                            fi
-
-                            docker logout || true
-                        '''
-                    }
                 }
             }
         }
         
+        // ── 12. Deploy to Staging (main/develop) ─────────────────────
         stage('Deploy to Staging') {
-            when {
-                expression {
-                    boolean isDevelop = env.GIT_BRANCH_NAME == 'develop' || env.GIT_BRANCH_NAME == 'main'
-                    echo "Deploy - branch: ${env.GIT_BRANCH_NAME}, isDevelop/main=${isDevelop}"
-                    return isDevelop
-                }
-            }
+            when { expression { return env.GIT_BRANCH_NAME in ['main', 'develop'] } }
             stages {
+
                 stage('Terraform Init & Plan') {
                     steps {
-                        script {
-                            withCredentials([
-                                [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials', accessKeyVariable: 'AWS_ACCESS_KEY_ID', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']
-                            ]) {
-                                sh '''
-                                    echo "========================================="
-                                    echo "  Terraform Init & Plan"
-                                    echo "========================================="
-                                    export AWS_DEFAULT_REGION="us-east-2"
+                        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials',
+                                          accessKeyVariable: 'AWS_ACCESS_KEY_ID', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']]) {
+                            sh '''
+                                export AWS_DEFAULT_REGION="us-east-2"
+                                cd infrastructure/terraform
 
-                                    cd infrastructure/terraform
+                                VERSION=$(cut -d= -f2 ../../version.txt 2>/dev/null || echo "${BUILD_NUMBER}")
+                                DOCKER_IMAGE="ronsss/devops-testing-app:${VERSION}"
+                                echo "Image: ${DOCKER_IMAGE}"
 
-                                    # Determine Docker image tag
-                                    if [ -f ../../version.txt ]; then
-                                        VERSION=$(cat ../../version.txt | cut -d= -f2)
-                                    else
-                                        VERSION="${BUILD_NUMBER}"
-                                    fi
-                                    DOCKER_IMAGE="ronsss/devops-testing-app:${VERSION}"
-
-                                    echo "Docker image for deployment: ${DOCKER_IMAGE}"
-
-                                    terraform init -input=false
-
-                                    terraform plan \
-                                        -var="docker_image=${DOCKER_IMAGE}" \
-                                        -out=tfplan \
-                                        -input=false
-
-                                    echo "✅ Terraform plan created successfully"
-                                '''
-                            }
+                                terraform init -input=false
+                                terraform plan -var="docker_image=${DOCKER_IMAGE}" -out=tfplan -input=false
+                                echo "✅ Terraform plan created"
+                            '''
                         }
                     }
                 }
 
                 stage('Terraform Apply') {
                     steps {
-                        script {
-                            withCredentials([
-                                [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials', accessKeyVariable: 'AWS_ACCESS_KEY_ID', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']
-                            ]) {
-                                sh '''
-                                    echo "========================================="
-                                    echo "  Terraform Apply"
-                                    echo "========================================="
-                                    export AWS_DEFAULT_REGION="us-east-2"
-
-                                    cd infrastructure/terraform
-
-                                    terraform apply -auto-approve -input=false tfplan
-
-                                    echo ""
-                                    echo "--- Terraform Outputs ---"
-                                    terraform output -json > ../../terraform_outputs.json
-                                    terraform output
-                                    echo ""
-                                    echo "✅ Infrastructure provisioned successfully"
-                                '''
-                            }
+                        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials',
+                                          accessKeyVariable: 'AWS_ACCESS_KEY_ID', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']]) {
+                            sh '''
+                                export AWS_DEFAULT_REGION="us-east-2"
+                                cd infrastructure/terraform
+                                terraform apply -auto-approve -input=false tfplan
+                                terraform output -json > ../../terraform_outputs.json
+                                terraform output
+                                echo "✅ Infrastructure provisioned"
+                            '''
                         }
                     }
                 }
 
                 stage('Ansible Deploy') {
                     steps {
-                        script {
-                            withCredentials([
-                                [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials', accessKeyVariable: 'AWS_ACCESS_KEY_ID', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'],
-                                sshUserPrivateKey(credentialsId: 'StagingSSHKey', keyFileVariable: 'SSH_KEY_FILE'),
-                                usernamePassword(credentialsId: 'RonDockerUser', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')
-                            ]) {
-                                sh '''
-                                    echo "========================================="
-                                    echo "  Ansible Deploy"
-                                    echo "========================================="
+                        withCredentials([
+                            [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-credentials',
+                             accessKeyVariable: 'AWS_ACCESS_KEY_ID', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'],
+                            sshUserPrivateKey(credentialsId: 'StagingSSHKey', keyFileVariable: 'SSH_KEY_FILE'),
+                            usernamePassword(credentialsId: 'RonDockerUser', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')
+                        ]) {
+                            sh '''
+                                VERSION=$(cut -d= -f2 version.txt 2>/dev/null || echo "${BUILD_NUMBER}")
+                                DOCKER_IMAGE="ronsss/devops-testing-app:${VERSION}"
 
-                                    # Determine Docker image tag
-                                    if [ -f version.txt ]; then
-                                        VERSION=$(cat version.txt | cut -d= -f2)
-                                    else
-                                        VERSION="${BUILD_NUMBER}"
-                                    fi
-                                    DOCKER_IMAGE="ronsss/devops-testing-app:${VERSION}"
+                                STAGING_IP=$(python3 -c "import json; print(json.load(open('terraform_outputs.json'))['instance_public_ip']['value'])")
+                                echo "Staging IP: ${STAGING_IP}"
 
-                                    # Get staging IP from Terraform output
-                                    STAGING_IP=$(cat terraform_outputs.json | python3 -c "import sys,json; print(json.load(sys.stdin)['instance_public_ip']['value'])")
-                                    echo "Staging server IP: ${STAGING_IP}"
-
-                                    # Generate dynamic inventory
-                                    cat > infrastructure/ansible/inventory.ini <<INVENTORY_EOF
+                                # Generate dynamic inventory
+                                cat > infrastructure/ansible/inventory.ini <<INVENTORY_EOF
 [staging]
 ${STAGING_IP} ansible_user=ec2-user ansible_ssh_private_key_file=${SSH_KEY_FILE}
 INVENTORY_EOF
 
-                                    echo "Waiting for SSH to become available on ${STAGING_IP}..."
-                                    for i in $(seq 1 30); do
-                                        if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i "${SSH_KEY_FILE}" ec2-user@${STAGING_IP} "echo ready" >/dev/null 2>&1; then
-                                            echo "SSH is ready!"
-                                            break
-                                        fi
-                                        echo "  Attempt $i/30 - waiting 10s..."
-                                        sleep 10
-                                    done
-
-                                    # Activate Ansible venv (pre-installed in Jenkins image)
-                                    if [ -d /opt/venv ]; then
-                                        . /opt/venv/bin/activate
+                                # Wait for SSH
+                                echo "Waiting for SSH on ${STAGING_IP}..."
+                                for i in $(seq 1 30); do
+                                    if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+                                           -i "${SSH_KEY_FILE}" ec2-user@${STAGING_IP} \
+                                           "echo ready" >/dev/null 2>&1; then
+                                        echo "✓ SSH ready"; break
                                     fi
+                                    echo "  Attempt $i/30 — waiting 10s..."
+                                    sleep 10
+                                done
 
-                                    # Run Ansible playbook
-                                    ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook \
-                                        -i infrastructure/ansible/inventory.ini \
-                                        infrastructure/ansible/deploy.yml \
-                                        -e "docker_image=${DOCKER_IMAGE}" \
-                                        -e "app_port=5000" \
-                                        -e "docker_hub_user=${DOCKER_USER}" \
-                                        -e "docker_hub_pass=${DOCKER_PASS}" \
-                                        -v
+                                [ -d /opt/venv ] && . /opt/venv/bin/activate
 
-                                    echo ""
-                                    echo "✅ Application deployed successfully!"
-                                    echo "🌐 App URL: http://${STAGING_IP}:5000"
-                                '''
-                            }
+                                ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook \
+                                    -i infrastructure/ansible/inventory.ini \
+                                    infrastructure/ansible/deploy.yml \
+                                    -e "docker_image=${DOCKER_IMAGE}" \
+                                    -e "app_port=5000" \
+                                    -e "docker_hub_user=${DOCKER_USER}" \
+                                    -e "docker_hub_pass=${DOCKER_PASS}" \
+                                    -v
+
+                                echo "✅ Deployed: http://${STAGING_IP}:5000"
+                            '''
                         }
                     }
                 }
 
                 stage('Smoke Test') {
                     steps {
-                        script {
-                            sh '''
-                                echo "========================================="
-                                echo "  Smoke Test"
-                                echo "========================================="
+                        sh '''
+                            STAGING_IP=$(python3 -c "import json; print(json.load(open('terraform_outputs.json'))['instance_public_ip']['value'])")
+                            echo "Smoke testing http://${STAGING_IP}:5000"
 
-                                STAGING_IP=$(cat terraform_outputs.json | python3 -c "import sys,json; print(json.load(sys.stdin)['instance_public_ip']['value'])")
+                            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "http://${STAGING_IP}:5000/health")
+                            if [ "$HTTP_STATUS" = "200" ]; then
+                                echo "✅ Health check passed (HTTP ${HTTP_STATUS})"
+                            else
+                                echo "❌ Health check failed (HTTP ${HTTP_STATUS})"; exit 1
+                            fi
 
-                                echo "Running smoke tests against http://${STAGING_IP}:5000"
+                            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "http://${STAGING_IP}:5000/")
+                            if [ "$HTTP_STATUS" = "200" ]; then
+                                echo "✅ Homepage accessible (HTTP ${HTTP_STATUS})"
+                            else
+                                echo "⚠  Homepage returned HTTP ${HTTP_STATUS}"
+                            fi
 
-                                # Health check
-                                echo "1. Health check..."
-                                HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "http://${STAGING_IP}:5000/health")
-                                if [ "$HTTP_STATUS" = "200" ]; then
-                                    echo "   ✅ Health check passed (HTTP ${HTTP_STATUS})"
-                                else
-                                    echo "   ❌ Health check failed (HTTP ${HTTP_STATUS})"
-                                    exit 1
-                                fi
-
-                                # Homepage check
-                                echo "2. Homepage check..."
-                                HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "http://${STAGING_IP}:5000/")
-                                if [ "$HTTP_STATUS" = "200" ]; then
-                                    echo "   ✅ Homepage accessible (HTTP ${HTTP_STATUS})"
-                                else
-                                    echo "   ⚠ Homepage returned HTTP ${HTTP_STATUS}"
-                                fi
-
-                                echo ""
-                                echo "✅ All smoke tests passed!"
-                                echo "🌐 Staging URL: http://${STAGING_IP}:5000"
-                            '''
-                        }
+                            echo "✅ Smoke tests passed — http://${STAGING_IP}:5000"
+                        '''
                     }
                 }
             }
         }
     }
     
+    // ═════════════════════════════════════════════════════════════════════
+    //  POST-BUILD: Email + Jira
+    // ═════════════════════════════════════════════════════════════════════
     post {
-        always {
-            cleanWs()
-        }
+        always { cleanWs() }
+
+        // ── Success ──────────────────────────────────────────────────────
         success {
             script {
-                sh 'echo "Pipeline completed successfully!"'
-                emailext (
+                emailext(
                     subject: "✅ Pipeline Success: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                    to: 'whtestore@gmail.com', mimeType: 'text/html',
                     body: """
-                        <h2>✅ Pipeline Completed Successfully</h2>
+                        <h2 style="color:green;">✅ Pipeline Completed Successfully</h2>
                         <table style="border-collapse:collapse; width:100%; max-width:600px;">
-                            <tr><td style="padding:8px; border:1px solid #ddd;"><strong>Build Number</strong></td><td style="padding:8px; border:1px solid #ddd;">#${env.BUILD_NUMBER}</td></tr>
-                            <tr><td style="padding:8px; border:1px solid #ddd;"><strong>Branch</strong></td><td style="padding:8px; border:1px solid #ddd;">${env.GIT_BRANCH_NAME ?: 'main'}</td></tr>
-                            <tr><td style="padding:8px; border:1px solid #ddd;"><strong>Duration</strong></td><td style="padding:8px; border:1px solid #ddd;">${currentBuild.durationString}</td></tr>
-                            <tr><td style="padding:8px; border:1px solid #ddd;"><strong>Status</strong></td><td style="padding:8px; border:1px solid #ddd; color:green;">SUCCESS</td></tr>
+                            <tr><td style="padding:8px; border:1px solid #ddd;"><b>Build</b></td><td style="padding:8px; border:1px solid #ddd;">#${env.BUILD_NUMBER}</td></tr>
+                            <tr><td style="padding:8px; border:1px solid #ddd;"><b>Branch</b></td><td style="padding:8px; border:1px solid #ddd;">${env.GIT_BRANCH_NAME ?: 'main'}</td></tr>
+                            <tr><td style="padding:8px; border:1px solid #ddd;"><b>Duration</b></td><td style="padding:8px; border:1px solid #ddd;">${currentBuild.durationString}</td></tr>
+                            <tr><td style="padding:8px; border:1px solid #ddd;"><b>Status</b></td><td style="padding:8px; border:1px solid #ddd; color:green;"><b>SUCCESS</b></td></tr>
                         </table>
-                        <p>📎 Check the <a href="${env.BUILD_URL}artifact/">build artifacts</a> for reports.</p>
-                        <p><a href="${env.BUILD_URL}">🔗 View Full Build Details</a></p>
-                    """,
-                    to: "whtestore@gmail.com",
-                    mimeType: 'text/html'
+                        <p>📎 <a href="${env.BUILD_URL}artifact/">Artifacts</a> | 🔗 <a href="${env.BUILD_URL}">Details</a></p>
+                    """
                 )
             }
         }
+
+        // ── Unstable ─────────────────────────────────────────────────────
         unstable {
             script {
-                sh 'echo "Pipeline finished UNSTABLE (test failures detected)."'
                 def failedStageText = 'Test stage(s) had failures'
-                emailext (
+                emailext(
                     subject: "⚠️ Pipeline Unstable: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                    to: 'whtestore@gmail.com', mimeType: 'text/html',
                     body: """
-                        <h2>⚠️ Pipeline Finished Unstable</h2>
+                        <h2 style="color:orange;">⚠️ Pipeline Finished Unstable</h2>
                         <table style="border-collapse:collapse; width:100%; max-width:600px;">
-                            <tr><td style="padding:8px; border:1px solid #ddd;"><strong>Build Number</strong></td><td style="padding:8px; border:1px solid #ddd;">#${env.BUILD_NUMBER}</td></tr>
-                            <tr><td style="padding:8px; border:1px solid #ddd;"><strong>Branch</strong></td><td style="padding:8px; border:1px solid #ddd;">${env.GIT_BRANCH_NAME ?: 'main'}</td></tr>
-                            <tr><td style="padding:8px; border:1px solid #ddd;"><strong>Duration</strong></td><td style="padding:8px; border:1px solid #ddd;">${currentBuild.durationString}</td></tr>
-                            <tr><td style="padding:8px; border:1px solid #ddd;"><strong>Failed Stage</strong></td><td style="padding:8px; border:1px solid #ddd; color:orange;">${failedStageText}</td></tr>
-                            <tr><td style="padding:8px; border:1px solid #ddd;"><strong>Status</strong></td><td style="padding:8px; border:1px solid #ddd; color:orange;">UNSTABLE</td></tr>
+                            <tr><td style="padding:8px; border:1px solid #ddd;"><b>Build</b></td><td style="padding:8px; border:1px solid #ddd;">#${env.BUILD_NUMBER}</td></tr>
+                            <tr><td style="padding:8px; border:1px solid #ddd;"><b>Branch</b></td><td style="padding:8px; border:1px solid #ddd;">${env.GIT_BRANCH_NAME ?: 'main'}</td></tr>
+                            <tr><td style="padding:8px; border:1px solid #ddd;"><b>Duration</b></td><td style="padding:8px; border:1px solid #ddd;">${currentBuild.durationString}</td></tr>
+                            <tr><td style="padding:8px; border:1px solid #ddd;"><b>Issue</b></td><td style="padding:8px; border:1px solid #ddd; color:orange;">${failedStageText}</td></tr>
+                            <tr><td style="padding:8px; border:1px solid #ddd;"><b>Status</b></td><td style="padding:8px; border:1px solid #ddd; color:orange;"><b>UNSTABLE</b></td></tr>
                         </table>
-                        <p><a href="${env.BUILD_URL}testReport/">🧪 View Test Report</a></p>
-                        <p><a href="${env.BUILD_URL}">🔗 View Full Build Details</a></p>
-                    """,
-                    to: "whtestore@gmail.com",
-                    mimeType: 'text/html'
+                        <p>🧪 <a href="${env.BUILD_URL}testReport/">Tests</a> | 🔗 <a href="${env.BUILD_URL}">Details</a></p>
+                    """
                 )
-                // Create Jira Bug ticket on unstable
+                // Jira ticket — Medium priority
                 withCredentials([string(credentialsId: 'JIRA_API_TOKEN', variable: 'JIRA_TOKEN')]) {
                     sh '''
-                        echo "Creating Jira ticket for unstable pipeline..."
                         RESPONSE=$(curl -s -w "\\n%{http_code}" -X POST \
                             "https://ron1120.atlassian.net/rest/api/3/issue" \
                             -H "Content-Type: application/json" \
                             -u "ronss1120@gmail.com:${JIRA_TOKEN}" \
-                            -d '{
-                                "fields": {
-                                    "project": {"key": "KAN"},
-                                    "summary": "⚠️ Pipeline Unstable: Build #'"${BUILD_NUMBER}"' ('"${JOB_NAME}"')",
-                                    "description": {
-                                        "type": "doc",
-                                        "version": 1,
-                                        "content": [
-                                            {
-                                                "type": "paragraph",
-                                                "content": [
-                                                    {"type": "text", "text": "Jenkins pipeline finished unstable (test failures)."},
-                                                    {"type": "hardBreak"},
-                                                    {"type": "text", "text": "Job: '"${JOB_NAME}"'"},
-                                                    {"type": "hardBreak"},
-                                                    {"type": "text", "text": "Build: #'"${BUILD_NUMBER}"'"},
-                                                    {"type": "hardBreak"},
-                                                    {"type": "text", "text": "Branch: '"${GIT_BRANCH_NAME:-main}"'"},
-                                                    {"type": "hardBreak"},
-                                                    {"type": "text", "text": "Build URL: '"${BUILD_URL}"'"}
-                                                ]
-                                            }
-                                        ]
-                                    },
-                                    "issuetype": {"name": "Task"},
-                                    "priority": {"name": "Medium"}
-                                }
-                            }')
+                            -d '{"fields":{"project":{"key":"KAN"},"issuetype":{"name":"Task"},"priority":{"name":"Medium"},
+                                "summary":"⚠️ Pipeline Unstable: Build #'"${BUILD_NUMBER}"' ('"${JOB_NAME}"')",
+                                "description":{"type":"doc","version":1,"content":[{"type":"paragraph","content":[
+                                    {"type":"text","text":"Pipeline unstable (test failures)."},
+                                    {"type":"hardBreak"},{"type":"text","text":"Job: '"${JOB_NAME}"'"},
+                                    {"type":"hardBreak"},{"type":"text","text":"Build: #'"${BUILD_NUMBER}"'"},
+                                    {"type":"hardBreak"},{"type":"text","text":"Branch: '"${GIT_BRANCH_NAME:-main}"'"},
+                                    {"type":"hardBreak"},{"type":"text","text":"URL: '"${BUILD_URL}"'"}]}]}}}')
 
                         HTTP_CODE=$(echo "$RESPONSE" | tail -1)
                         BODY=$(echo "$RESPONSE" | head -n -1)
-
                         if [ "$HTTP_CODE" = "201" ]; then
-                            TICKET_KEY=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['key'])" 2>/dev/null)
-                            echo "✅ Jira ticket created: ${TICKET_KEY}"
-                            echo "🔗 https://ron1120.atlassian.net/browse/${TICKET_KEY}"
+                            TICKET=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['key'])" 2>/dev/null)
+                            echo "✅ Jira: ${TICKET} → https://ron1120.atlassian.net/browse/${TICKET}"
                         else
-                            echo "⚠ Failed to create Jira ticket (HTTP ${HTTP_CODE})"
-                            echo "$BODY"
+                            echo "⚠ Jira failed (HTTP ${HTTP_CODE}): $BODY"
                         fi
                     '''
                 }
             }
         }
+
+        // ── Failure ──────────────────────────────────────────────────────
         failure {
             script {
-                sh 'echo "Pipeline failed!"'
                 def failedStageName = env.STAGE_NAME ?: 'Unknown'
-                emailext (
+                emailext(
                     subject: "❌ Pipeline FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                    to: 'whtestore@gmail.com', mimeType: 'text/html',
                     body: """
-                        <h2>❌ Pipeline Failed</h2>
+                        <h2 style="color:red;">❌ Pipeline Failed</h2>
                         <table style="border-collapse:collapse; width:100%; max-width:600px;">
-                            <tr><td style="padding:8px; border:1px solid #ddd;"><strong>Build Number</strong></td><td style="padding:8px; border:1px solid #ddd;">#${env.BUILD_NUMBER}</td></tr>
-                            <tr><td style="padding:8px; border:1px solid #ddd;"><strong>Branch</strong></td><td style="padding:8px; border:1px solid #ddd;">${env.GIT_BRANCH_NAME ?: 'main'}</td></tr>
-                            <tr><td style="padding:8px; border:1px solid #ddd;"><strong>Duration</strong></td><td style="padding:8px; border:1px solid #ddd;">${currentBuild.durationString}</td></tr>
-                            <tr><td style="padding:8px; border:1px solid #ddd;"><strong>Failed Stage</strong></td><td style="padding:8px; border:1px solid #ddd; color:red;">${failedStageName}</td></tr>
-                            <tr><td style="padding:8px; border:1px solid #ddd;"><strong>Status</strong></td><td style="padding:8px; border:1px solid #ddd; color:red;">FAILURE</td></tr>
+                            <tr><td style="padding:8px; border:1px solid #ddd;"><b>Build</b></td><td style="padding:8px; border:1px solid #ddd;">#${env.BUILD_NUMBER}</td></tr>
+                            <tr><td style="padding:8px; border:1px solid #ddd;"><b>Branch</b></td><td style="padding:8px; border:1px solid #ddd;">${env.GIT_BRANCH_NAME ?: 'main'}</td></tr>
+                            <tr><td style="padding:8px; border:1px solid #ddd;"><b>Duration</b></td><td style="padding:8px; border:1px solid #ddd;">${currentBuild.durationString}</td></tr>
+                            <tr><td style="padding:8px; border:1px solid #ddd;"><b>Failed Stage</b></td><td style="padding:8px; border:1px solid #ddd; color:red;">${failedStageName}</td></tr>
+                            <tr><td style="padding:8px; border:1px solid #ddd;"><b>Status</b></td><td style="padding:8px; border:1px solid #ddd; color:red;"><b>FAILURE</b></td></tr>
                         </table>
-                        <p><a href="${env.BUILD_URL}console">📋 View Console Output</a></p>
-                        <p><a href="${env.BUILD_URL}">🔗 View Full Build Details</a></p>
-                    """,
-                    to: "whtestore@gmail.com",
-                    mimeType: 'text/html'
+                        <p>📋 <a href="${env.BUILD_URL}console">Console</a> | 🔗 <a href="${env.BUILD_URL}">Details</a></p>
+                    """
                 )
-                // Create Jira Bug ticket on failure
+                // Jira ticket — High priority
                 withCredentials([string(credentialsId: 'JIRA_API_TOKEN', variable: 'JIRA_TOKEN')]) {
                     sh '''
-                        echo "Creating Jira ticket for pipeline failure..."
                         RESPONSE=$(curl -s -w "\\n%{http_code}" -X POST \
                             "https://ron1120.atlassian.net/rest/api/3/issue" \
                             -H "Content-Type: application/json" \
                             -u "ronss1120@gmail.com:${JIRA_TOKEN}" \
-                            -d '{
-                                "fields": {
-                                    "project": {"key": "KAN"},
-                                    "summary": "❌ Pipeline Failed: Build #'"${BUILD_NUMBER}"' ('"${JOB_NAME}"')",
-                                    "description": {
-                                        "type": "doc",
-                                        "version": 1,
-                                        "content": [
-                                            {
-                                                "type": "paragraph",
-                                                "content": [
-                                                    {"type": "text", "text": "Jenkins pipeline failed."},
-                                                    {"type": "hardBreak"},
-                                                    {"type": "text", "text": "Job: '"${JOB_NAME}"'"},
-                                                    {"type": "hardBreak"},
-                                                    {"type": "text", "text": "Build: #'"${BUILD_NUMBER}"'"},
-                                                    {"type": "hardBreak"},
-                                                    {"type": "text", "text": "Branch: '"${GIT_BRANCH_NAME:-main}"'"},
-                                                    {"type": "hardBreak"},
-                                                    {"type": "text", "text": "Build URL: '"${BUILD_URL}"'"}
-                                                ]
-                                            }
-                                        ]
-                                    },
-                                    "issuetype": {"name": "Task"},
-                                    "priority": {"name": "High"}
-                                }
-                            }')
+                            -d '{"fields":{"project":{"key":"KAN"},"issuetype":{"name":"Task"},"priority":{"name":"High"},
+                                "summary":"❌ Pipeline Failed: Build #'"${BUILD_NUMBER}"' ('"${JOB_NAME}"')",
+                                "description":{"type":"doc","version":1,"content":[{"type":"paragraph","content":[
+                                    {"type":"text","text":"Pipeline failed."},
+                                    {"type":"hardBreak"},{"type":"text","text":"Job: '"${JOB_NAME}"'"},
+                                    {"type":"hardBreak"},{"type":"text","text":"Build: #'"${BUILD_NUMBER}"'"},
+                                    {"type":"hardBreak"},{"type":"text","text":"Branch: '"${GIT_BRANCH_NAME:-main}"'"},
+                                    {"type":"hardBreak"},{"type":"text","text":"URL: '"${BUILD_URL}"'"}]}]}}}')
 
                         HTTP_CODE=$(echo "$RESPONSE" | tail -1)
                         BODY=$(echo "$RESPONSE" | head -n -1)
-
                         if [ "$HTTP_CODE" = "201" ]; then
-                            TICKET_KEY=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['key'])" 2>/dev/null)
-                            echo "✅ Jira ticket created: ${TICKET_KEY}"
-                            echo "🔗 https://ron1120.atlassian.net/browse/${TICKET_KEY}"
+                            TICKET=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['key'])" 2>/dev/null)
+                            echo "✅ Jira: ${TICKET} → https://ron1120.atlassian.net/browse/${TICKET}"
                         else
-                            echo "⚠ Failed to create Jira ticket (HTTP ${HTTP_CODE})"
-                            echo "$BODY"
+                            echo "⚠ Jira failed (HTTP ${HTTP_CODE}): $BODY"
                         fi
                     '''
                 }
