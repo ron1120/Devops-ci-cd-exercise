@@ -29,7 +29,12 @@ output "ssh_command" {
 
 output "vpc_id" {
   description = "VPC ID"
-  value       = aws_vpc.staging.id
+  value       = local.vpc_id
+}
+
+output "vpc_reused" {
+  description = "Whether an existing VPC was reused"
+  value       = local.vpc_exists
 }
 
 output "security_group_id" {

@@ -22,3 +22,12 @@ app_port = 5000
 
 # CIDR block allowed to SSH (restrict to your IP for security)
 # allowed_ssh_cidr = "203.0.113.50/32"
+
+# VPC name — if a VPC with this name already exists it will be reused
+vpc_name = "staging-vpc"
+
+# VPC CIDR (only used when creating a new VPC)
+# vpc_cidr = "10.0.0.0/16"
+
+# Subnet CIDR
+# subnet_cidr = "10.0.1.0/24"

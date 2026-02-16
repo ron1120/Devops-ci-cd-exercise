@@ -2,23 +2,43 @@
 # Terraform - Networking (VPC, Subnet, Security Groups)
 # =============================================================================
 
-# --- VPC ---
+# --- Look up existing VPC by name tag ---
+data "aws_vpcs" "existing" {
+  filter {
+    name   = "tag:Name"
+    values = [var.vpc_name]
+  }
+}
+
+# Fetch full details of the existing VPC (if found)
+data "aws_vpc" "existing" {
+  count = length(data.aws_vpcs.existing.ids) > 0 ? 1 : 0
+  id    = tolist(data.aws_vpcs.existing.ids)[0]
+}
+
+locals {
+  vpc_exists = length(data.aws_vpcs.existing.ids) > 0
+  vpc_id     = local.vpc_exists ? data.aws_vpc.existing[0].id : aws_vpc.staging[0].id
+}
+
+# --- VPC (created only if one with the same name doesn't exist) ---
 resource "aws_vpc" "staging" {
-  cidr_block           = "10.0.0.0/16"
+  count                = local.vpc_exists ? 0 : 1
+  cidr_block           = var.vpc_cidr
   enable_dns_support   = true
   enable_dns_hostnames = true
 
   tags = {
-    Name = "${var.environment}-vpc"
+    Name = var.vpc_name
   }
 }
 
 # --- Public Subnet ---
 resource "aws_subnet" "public" {
-  vpc_id                  = aws_vpc.staging.id
-  cidr_block              = "10.0.1.0/24"
+  vpc_id                  = local.vpc_id
+  cidr_block              = var.subnet_cidr
   map_public_ip_on_launch = true
-  availability_zone       = "us-east-2c"
+  availability_zone       = "${var.aws_region}c"
 
   tags = {
     Name = "${var.environment}-public-subnet"
@@ -27,7 +47,7 @@ resource "aws_subnet" "public" {
 
 # --- Internet Gateway ---
 resource "aws_internet_gateway" "staging" {
-  vpc_id = aws_vpc.staging.id
+  vpc_id = local.vpc_id
 
   tags = {
     Name = "${var.environment}-igw"
@@ -36,7 +56,7 @@ resource "aws_internet_gateway" "staging" {
 
 # --- Route Table ---
 resource "aws_route_table" "public" {
-  vpc_id = aws_vpc.staging.id
+  vpc_id = local.vpc_id
 
   route {
     cidr_block = "0.0.0.0/0"
@@ -56,7 +76,7 @@ resource "aws_route_table_association" "public" {
 # --- Security Group ---
 resource "aws_security_group" "app" {
   name_prefix = "${var.environment}-app-"
-  vpc_id      = aws_vpc.staging.id
+  vpc_id      = local.vpc_id
   description = "Security group for staging application"
 
   # SSH access
