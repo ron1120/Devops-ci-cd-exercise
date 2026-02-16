@@ -202,50 +202,7 @@ pipeline {
             }
         }
         
-        // ── 7. Performance Tests (production only) ────────────────────
-        stage('Performance Tests') {
-            when { expression { return env.GIT_BRANCH_NAME == 'production' } }
-            steps {
-                sh '''
-                    mkdir -p reports
-                    LOCUST_ARGS="-f tests/performance/locustfile.py --headless \
-                        --users 10 --spawn-rate 2 --run-time 30s \
-                        --host http://localhost:5000 \
-                        --html reports/performance-report.html"
-
-                    if command -v python3 >/dev/null 2>&1; then
-                        . ${VENV_DIR}/bin/activate
-                        python main.py & APP_PID=$!; sleep 5
-                        locust ${LOCUST_ARGS} || true
-                        kill $APP_PID || true
-
-                    elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-                        docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c \
-                            "pip install --no-cache-dir -r requirements.txt \
-                             && python main.py & APP_PID=\$!; sleep 5; \
-                             locust ${LOCUST_ARGS} || true; \
-                             kill \$APP_PID || true"
-                    else
-                        echo "Cannot run performance tests"; exit 1
-                    fi
-                '''
-            }
-            post {
-                always {
-                    archiveArtifacts artifacts: 'reports/performance-report.html', allowEmptyArchive: true
-                    publishHTML(target: [
-                        reportName: 'Performance Report',
-                        reportDir: 'reports',
-                        reportFiles: 'performance-report.html',
-                        keepAll: true,
-                        alwaysLinkToLastBuild: true,
-                        allowMissing: true
-                    ])
-                }
-            }
-        }
-        
-        // ── 8. Security Scan ──────────────────────────────────────────
+        // ── 7. Security Scan ──────────────────────────────────────────
         stage('Security Scan') {
             steps {
                 sh '''
@@ -280,7 +237,7 @@ pipeline {
             }
         }
         
-        // ── 9. Create Version Tag (main/develop) ────────────────────
+        // ── 8. Create Version Tag (main/develop) ────────────────────
         stage('Create Version Tag') {
             when { expression { return env.GIT_BRANCH_NAME in ['main', 'develop'] } }
             steps {
@@ -300,7 +257,7 @@ pipeline {
             }
         }
         
-        // ── 10. Build Docker Image (main/develop) ─────────────────
+        // ── 9. Build Docker Image (main/develop) ──────────────────
         stage('Build Docker Image') {
             when { expression { return env.GIT_BRANCH_NAME in ['main', 'develop'] } }
             steps {
@@ -322,7 +279,7 @@ pipeline {
             }
         }
 
-        // ── 11. Push Docker Image (main/develop) ──────────────────
+        // ── 10. Push Docker Image (main/develop) ─────────────────
         stage('Push Docker Image') {
             when { expression { return env.GIT_BRANCH_NAME in ['main', 'develop'] } }
             steps {
@@ -356,7 +313,7 @@ pipeline {
             }
         }
         
-        // ── 12. Deploy to Staging (main/develop) ─────────────────────
+        // ── 11. Deploy to Staging (main/develop) ─────────────────────
         stage('Deploy to Staging') {
             when { expression { return env.GIT_BRANCH_NAME in ['main', 'develop'] } }
             stages {
@@ -469,6 +426,46 @@ INVENTORY_EOF
 
                             echo "✅ Smoke tests passed — http://${STAGING_IP}:5000"
                         '''
+                    }
+                }
+
+                stage('Performance Tests') {
+                    steps {
+                        sh '''
+                            mkdir -p reports
+                            STAGING_IP=$(python3 -c "import json; print(json.load(open('terraform_outputs.json'))['instance_public_ip']['value'])")
+                            echo "🚀 Running performance test against http://${STAGING_IP}:5000"
+
+                            LOCUST_ARGS="-f tests/performance/locustfile.py --headless \
+                                --users 10 --spawn-rate 2 --run-time 30s \
+                                --host http://${STAGING_IP}:5000 \
+                                --html reports/performance-report.html"
+
+                            if command -v python3 >/dev/null 2>&1; then
+                                . ${VENV_DIR}/bin/activate
+                                locust ${LOCUST_ARGS} || true
+
+                            elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+                                docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c \
+                                    "pip install --no-cache-dir -r requirements.txt \
+                                     && locust ${LOCUST_ARGS} || true"
+                            else
+                                echo "Cannot run performance tests"; exit 1
+                            fi
+                        '''
+                    }
+                    post {
+                        always {
+                            archiveArtifacts artifacts: 'reports/performance-report.html', allowEmptyArchive: true
+                            publishHTML(target: [
+                                reportName: 'Performance Report',
+                                reportDir: 'reports',
+                                reportFiles: 'performance-report.html',
+                                keepAll: true,
+                                alwaysLinkToLastBuild: true,
+                                allowMissing: true
+                            ])
+                        }
                     }
                 }
             }
