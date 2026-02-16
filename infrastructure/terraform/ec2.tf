@@ -73,10 +73,16 @@ resource "aws_instance" "app" {
 
 # --- Elastic IP (optional, for stable IP) ---
 resource "aws_eip" "app" {
+  count    = var.enable_eip ? 1 : 0
   instance = aws_instance.app.id
   domain   = "vpc"
 
   tags = {
     Name = "${var.environment}-app-eip"
   }
+}
+
+locals {
+  public_ip  = var.enable_eip ? aws_eip.app[0].public_ip : aws_instance.app.public_ip
+  public_dns = var.enable_eip ? aws_eip.app[0].public_dns : aws_instance.app.public_dns
 }

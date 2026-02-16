@@ -8,23 +8,23 @@ output "instance_id" {
 }
 
 output "instance_public_ip" {
-  description = "Elastic IP address of the staging server"
-  value       = aws_eip.app.public_ip
+  description = "Public IP of the staging server (EIP if enabled, otherwise instance IP)"
+  value       = local.public_ip
 }
 
 output "instance_public_dns" {
   description = "Public DNS of the staging server"
-  value       = aws_eip.app.public_dns
+  value       = local.public_dns
 }
 
 output "app_url" {
   description = "URL to access the application"
-  value       = "http://${aws_eip.app.public_ip}:${var.app_port}"
+  value       = "http://${local.public_ip}:${var.app_port}"
 }
 
 output "ssh_command" {
   description = "SSH command to connect to the instance"
-  value       = "ssh -i ~/.ssh/${var.key_name}.pem ec2-user@${aws_eip.app.public_ip}"
+  value       = "ssh -i ~/.ssh/${var.key_name}.pem ec2-user@${local.public_ip}"
 }
 
 output "vpc_id" {

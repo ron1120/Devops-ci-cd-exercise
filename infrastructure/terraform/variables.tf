@@ -44,6 +44,12 @@ variable "allowed_ssh_cidr" {
   default     = "0.0.0.0/0"
 }
 
+variable "enable_eip" {
+  description = "Whether to allocate an Elastic IP for the instance. Set to false if you hit the EIP address limit."
+  type        = bool
+  default     = false
+}
+
 variable "vpc_name" {
   description = "Name tag for the VPC. If a VPC with this name already exists it will be reused instead of creating a new one."
   type        = string
