@@ -8,8 +8,6 @@
 
 ![Architecture for project](./images/ci_cd_jenkins.png)
 ![Architecture for project](./images/ci-cd.png)
-![Architecture for project](./images/jira.png)
-![Architecture for project](./images/mail.jpeg)
 
 ### High-Level Flow
 
