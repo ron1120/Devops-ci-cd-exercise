@@ -28,7 +28,7 @@ resource "aws_instance" "app" {
   ami                    = data.aws_ami.amazon_linux.id
   instance_type          = var.instance_type
   key_name               = var.key_name
-  subnet_id              = aws_subnet.public.id
+  subnet_id              = local.subnet_id
   vpc_security_group_ids = [aws_security_group.app.id]
 
   root_block_device {
