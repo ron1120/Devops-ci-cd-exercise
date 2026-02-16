@@ -67,21 +67,46 @@ pipeline {
 
                     if command -v python3 >/dev/null 2>&1; then
                         . ${VENV_DIR}/bin/activate
-                        flake8 app/ --output-file=reports/flake8.txt || true
-                        pylint app/ --output=reports/pylint.txt      || true
+                        flake8 app/ --format=default --output-file=reports/flake8.txt || true
+                        pylint app/ --output=reports/pylint.txt || true
 
                     elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
                         docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c \
                             "pip install --no-cache-dir -r requirements.txt \
-                             && flake8 app/ --output-file=reports/flake8.txt || true \
-                             && pylint app/ --output=reports/pylint.txt      || true"
+                             && flake8 app/ --format=default --output-file=reports/flake8.txt || true \
+                             && pylint app/ --output=reports/pylint.txt || true"
                     else
                         echo "Cannot run linters"; exit 1
                     fi
+
+                    # Wrap plain-text lint reports in HTML for sidebar display
+                    for f in flake8 pylint; do
+                        echo "<html><head><title>${f} Report</title></head><body><pre>" > reports/${f}-report.html
+                        cat reports/${f}.txt >> reports/${f}-report.html 2>/dev/null || echo "No output" >> reports/${f}-report.html
+                        echo "</pre></body></html>" >> reports/${f}-report.html
+                    done
                 '''
             }
             post {
-                always { archiveArtifacts artifacts: 'reports/*.txt', allowEmptyArchive: true }
+                always {
+                    archiveArtifacts artifacts: 'reports/flake8*, reports/pylint*', allowEmptyArchive: true
+                    publishHTML(target: [
+                        reportName: 'Flake8 Report',
+                        reportDir: 'reports',
+                        reportFiles: 'flake8-report.html',
+                        keepAll: true,
+                        alwaysLinkToLastBuild: true,
+                        allowMissing: true
+                    ])
+                    publishHTML(target: [
+                        reportName: 'Pylint Report',
+                        reportDir: 'reports',
+                        reportFiles: 'pylint-report.html',
+                        keepAll: true,
+                        alwaysLinkToLastBuild: true,
+                        allowMissing: true
+                    ])
+                }
             }
         }
         
@@ -113,6 +138,14 @@ pipeline {
                     junit 'reports/unit-tests.xml'
                     archiveArtifacts artifacts: 'htmlcov/**/*,reports/unit-tests.xml,reports/coverage.xml',
                                      allowEmptyArchive: false
+                    publishHTML(target: [
+                        reportName: 'Coverage Report',
+                        reportDir: 'htmlcov',
+                        reportFiles: 'index.html',
+                        keepAll: true,
+                        alwaysLinkToLastBuild: true,
+                        allowMissing: true
+                    ])
                 }
             }
         }
@@ -198,7 +231,17 @@ pipeline {
                 '''
             }
             post {
-                always { archiveArtifacts artifacts: 'reports/performance-report.html', allowEmptyArchive: true }
+                always {
+                    archiveArtifacts artifacts: 'reports/performance-report.html', allowEmptyArchive: true
+                    publishHTML(target: [
+                        reportName: 'Performance Report',
+                        reportDir: 'reports',
+                        reportFiles: 'performance-report.html',
+                        keepAll: true,
+                        alwaysLinkToLastBuild: true,
+                        allowMissing: true
+                    ])
+                }
             }
         }
         
@@ -210,18 +253,30 @@ pipeline {
                     if command -v python3 >/dev/null 2>&1; then
                         . ${VENV_DIR}/bin/activate
                         bandit -r app/ -f json -o reports/bandit-report.json || true
+                        bandit -r app/ -f html -o reports/bandit-report.html || true
 
                     elif command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
                         docker run --rm -v "$PWD":/workspace -w /workspace python:3.11-slim bash -c \
                             "pip install --no-cache-dir -r requirements.txt \
-                             && bandit -r app/ -f json -o reports/bandit-report.json || true"
+                             && bandit -r app/ -f json -o reports/bandit-report.json || true \
+                             && bandit -r app/ -f html -o reports/bandit-report.html || true"
                     else
                         echo "Cannot run security scan"; exit 1
                     fi
                 '''
             }
             post {
-                always { archiveArtifacts artifacts: 'reports/bandit-report.json', allowEmptyArchive: true }
+                always {
+                    archiveArtifacts artifacts: 'reports/bandit-report.*', allowEmptyArchive: true
+                    publishHTML(target: [
+                        reportName: 'Security Report (Bandit)',
+                        reportDir: 'reports',
+                        reportFiles: 'bandit-report.html',
+                        keepAll: true,
+                        alwaysLinkToLastBuild: true,
+                        allowMissing: true
+                    ])
+                }
             }
         }
         
