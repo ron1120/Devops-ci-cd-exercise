@@ -30,23 +30,20 @@ def app_server():
 @pytest.fixture
 def driver(app_server):
     firefox_options = Options()
-    # firefox_options.add_argument("--headless")
+    firefox_options.add_argument("--headless")
     firefox_options.add_argument("--no-sandbox")
     firefox_options.add_argument("--disable-dev-shm-usage")
+    firefox_options.add_argument("--disable-gpu")
+    firefox_options.add_argument("--window-size=1920,1080")
     
     try:
         service = Service(GeckoDriverManager().install())
         driver = webdriver.Firefox(service=service, options=firefox_options)
-    except OSError as e:
-        # Handle exec format error by trying to find system geckodriver
-        if "Exec format error" in str(e):
-            # Try to use system geckodriver if available
-            try:
-                driver = webdriver.Firefox(options=firefox_options)
-            except Exception:
-                pytest.skip("GeckoDriver not available or incompatible")
-        else:
-            raise e
+    except Exception:
+        try:
+            driver = webdriver.Firefox(options=firefox_options)
+        except Exception:
+            pytest.skip("Firefox/GeckoDriver not available – skipping Selenium tests")
     
     driver.implicitly_wait(10)
     

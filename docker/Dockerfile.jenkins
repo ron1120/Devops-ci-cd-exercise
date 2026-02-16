@@ -41,6 +41,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # -----------------------------
+# Install Firefox ESR + geckodriver (for Selenium E2E tests)
+# -----------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    firefox-esr \
+    libdbus-glib-1-2 \
+    libgtk-3-0 \
+    libx11-xcb1 \
+    libxt6 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install geckodriver (detect architecture automatically)
+RUN ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "arm64" ]; then GD_ARCH="linux-aarch64"; \
+    else GD_ARCH="linux64"; fi && \
+    GD_VERSION=$(curl -sS https://api.github.com/repos/mozilla/geckodriver/releases/latest | grep tag_name | cut -d '"' -f 4) && \
+    curl -fsSL "https://github.com/mozilla/geckodriver/releases/download/${GD_VERSION}/geckodriver-${GD_VERSION}-${GD_ARCH}.tar.gz" -o geckodriver.tar.gz && \
+    tar -xzf geckodriver.tar.gz -C /usr/local/bin/ && \
+    chmod +x /usr/local/bin/geckodriver && \
+    rm geckodriver.tar.gz
+
+# -----------------------------
 # Install Docker CLI
 # -----------------------------
 RUN curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg && \
